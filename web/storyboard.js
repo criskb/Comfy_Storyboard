@@ -460,14 +460,16 @@ class StoryboardWorkspace {
             e.preventDefault();
             this.isInteracting = true;
             
-            if (!e.shiftKey && !this.boardData.selection.includes(item.id)) {
-                this.boardData.selection = [item.id];
-            } else if (e.shiftKey) {
+            // Selection logic
+            if (e.shiftKey) {
                 if (this.boardData.selection.includes(item.id)) {
                     this.boardData.selection = this.boardData.selection.filter(id => id !== item.id);
                 } else {
                     this.boardData.selection.push(item.id);
                 }
+            } else {
+                // Single select
+                this.boardData.selection = [item.id];
             }
             this.renderBoard();
 
@@ -535,6 +537,7 @@ class StoryboardWorkspace {
         }
 
         if (item.type === "image") {
+            el.classList.add("image-item");
             let img = el.querySelector("img");
             if (!img) {
                 img = document.createElement("img");
@@ -860,13 +863,14 @@ class StoryboardWorkspace {
         let isPanning = false;
         let startPos = { x: 0, y: 0 };
 
-        this.canvas.onclick = () => {
-            this.boardData.selection = [];
-            this.renderBoard();
-            this.saveBoard();
-        };
-
         this.canvasContainer.onmousedown = (e) => {
+            // Deselect if clicking the canvas directly
+            if (e.target === this.canvas || e.target === this.canvasContainer) {
+                this.boardData.selection = [];
+                this.renderBoard();
+                this.saveBoard();
+            }
+
             if (e.button === 1 || (e.button === 0 && e.altKey)) {
                 isPanning = true;
                 this.isInteracting = true;

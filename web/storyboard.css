@@ -209,19 +209,20 @@
 
 .storyboard-item {
     position: absolute;
-    border: 2px solid transparent;
-    transition: border-color 0.2s;
+    border: 3px solid transparent;
+    transition: border-color 0.2s, box-shadow 0.2s;
     user-select: none;
     pointer-events: auto;
+    box-sizing: border-box;
 }
 
 .storyboard-item:hover {
-    border-color: #4CAF50;
+    border-color: rgba(76, 175, 80, 0.5);
 }
 
 .storyboard-item.selected {
     border-color: #2196F3;
-    box-shadow: 0 0 10px rgba(33, 150, 243, 0.5);
+    box-shadow: 0 0 15px rgba(33, 150, 243, 0.6);
 }
 
 .storyboard-resize-handle {
@@ -257,21 +258,29 @@
     text-transform: uppercase;
 }
 
-.storyboard-item img {
+.storyboard-item.image-item {
+    border-radius: 12px;
+}
+
+.storyboard-item.image-item img {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
-    border-radius: 12px;
+    border-radius: 9px; /* Slightly smaller than container to look nice */
 }
 
 .storyboard-item.slot-item {
     background: #1a1a1a;
-    border: 2px dashed #444;
+    border: 3px dashed #444;
     display: flex;
     justify-content: center;
     align-items: center;
     border-radius: 12px;
+}
+
+.storyboard-item.slot-item.selected {
+    border: 3px solid #2196F3;
 }
 
 .storyboard-item.note-item {
@@ -279,7 +288,6 @@
     color: #333;
     padding: 20px;
     box-shadow: 2px 2px 10px rgba(0,0,0,0.3);
-    border: none;
     border-radius: 12px;
     display: flex;
     justify-content: center;
