@@ -54,8 +54,11 @@ class StoryboardStore:
             json.dump(board_data, f, indent=2)
         
         if notify:
-            from server import PromptServer
-            PromptServer.instance.send_sync("storyboard/update", {"board_id": board_id})
+            try:
+                from server import PromptServer
+                PromptServer.instance.send("storyboard/update", {"board_id": board_id})
+            except Exception:
+                pass
         
         return board_id
 

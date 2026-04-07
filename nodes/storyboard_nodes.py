@@ -76,6 +76,9 @@ class StoryboardSend:
                 "label": ("STRING", {"default": ""}),
                 "tags": ("STRING", {"default": ""}),
                 "append_mode": (["replace", "append"], {"default": "replace"}),
+            },
+            "optional": {
+                "manifest": ("STORYBOARD_MANIFEST",),
             }
         }
 
@@ -84,7 +87,13 @@ class StoryboardSend:
     FUNCTION = "send"
     CATEGORY = "Storyboard"
 
-    def send(self, images, board_id, target_mode, target, label, tags, append_mode):
+    def send(self, images, board_id, target_mode, target, label, tags, append_mode, manifest=None):
+        if manifest and isinstance(manifest, dict) and "board_id" in manifest:
+            board_id = manifest["board_id"]
+        
+        if not board_id:
+            board_id = "default"
+            
         board_data = store.get_board(board_id)
         selection = board_data.get("selection", [])
         items = board_data.get("items", [])
