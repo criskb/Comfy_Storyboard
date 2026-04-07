@@ -56,8 +56,10 @@ class StoryboardStore:
         if notify:
             try:
                 from server import PromptServer
+                print(f"Storyboard: Notifying update for board '{board_id}'")
                 PromptServer.instance.send("storyboard/update", {"board_id": board_id})
-            except Exception:
+            except Exception as e:
+                print(f"Storyboard: Failed to notify update: {e}")
                 pass
         
         return board_id

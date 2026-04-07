@@ -11,7 +11,7 @@ class Storyboard:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "action": (["none", "open", "clear", "export"], {"default": "none"}),
+                "action": (["none", "open", "clear", "export", "save_to_manifest"], {"default": "none"}),
                 "target_id": ("STRING", {"default": ""}),
                 "board_id": ("STRING", {"default": "default"}),
                 "version": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
@@ -94,6 +94,7 @@ class StoryboardSend:
         if not board_id:
             board_id = "default"
             
+        print(f"StoryboardSend: Sending {images.shape[0]} images to board '{board_id}' (mode: {target_mode})")
         board_data = store.get_board(board_id)
         selection = board_data.get("selection", [])
         items = board_data.get("items", [])
@@ -221,6 +222,7 @@ class StoryboardSend:
         board_data["items"] = items
         store.save_board(board_data)
         return (images, board_data)
+
 
 class StoryboardRead:
     @classmethod

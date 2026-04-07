@@ -80,6 +80,7 @@ class StoryboardWorkspace {
             <div class="storyboard-header-left">
                 <span>Storyboard:</span>
                 <select id="storyboard-selector"></select>
+                <button id="storyboard-refresh-board" title="Refresh Board">🔄</button>
                 <button id="storyboard-new-board" title="New Board">➕</button>
                 <button id="storyboard-rename-board" title="Rename Board">✏️</button>
                 <button id="storyboard-delete-board" class="danger" title="Delete Board">🗑️</button>
@@ -136,6 +137,8 @@ class StoryboardWorkspace {
         
         this.boardSelector = document.getElementById("storyboard-selector");
         this.boardSelector.onchange = (e) => this.show(e.target.value, this.node);
+
+        document.getElementById("storyboard-refresh-board").onclick = () => this.loadBoard();
 
         document.getElementById("storyboard-new-board").onclick = async () => {
             const name = prompt("Enter new storyboard name:");
@@ -286,6 +289,7 @@ class StoryboardWorkspace {
     async loadBoard() {
         const response = await fetch(`/mkr/storyboard/${this.boardId}`);
         this.boardData = await response.json();
+        console.log("Storyboard loaded:", this.boardData);
         if (!this.boardData.selection) this.boardData.selection = [];
         this.renderBoard();
 
@@ -323,6 +327,16 @@ class StoryboardWorkspace {
         const b = parseInt(hexcolor.slice(5, 7), 16);
         const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
         return (yiq >= 128) ? "#000" : "#fff";
+    }
+
+    generateUUID() {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
     }
 
     renderBoard() {
@@ -782,7 +796,7 @@ class StoryboardWorkspace {
                     const result = await response.json();
                     if (result.filename) {
                         this.boardData.items.push({
-                            id: crypto.randomUUID(),
+                            id: this.generateUUID(),
                             type: "image",
                             x: -this.offset.x / this.scale + 100,
                             y: -this.offset.y / this.scale + 100,
@@ -819,7 +833,7 @@ class StoryboardWorkspace {
                     const result = await response.json();
                     if (result.filename) {
                         this.boardData.items.push({
-                            id: crypto.randomUUID(),
+                            id: this.generateUUID(),
                             type: "image",
                             x: mouseX,
                             y: mouseY,
