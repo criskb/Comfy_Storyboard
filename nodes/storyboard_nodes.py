@@ -1,0 +1,243 @@
+import os
+import torch
+import json
+import uuid
+from PIL import Image
+import numpy as np
+from .storyboard_store import store
+
+class Storyboard:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "action": (["none", "open", "clear", "export"], {"default": "none"}),
+                "target_id": ("STRING", {"default": ""}),
+                "board_id": ("STRING", {"default": "default"}),
+                "version": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+            },
+            "optional": {
+                "images": ("IMAGE",),
+                "manifest_in": ("STORYBOARD_MANIFEST",),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "IMAGE", "MASK", "JSON", "STORYBOARD_MANIFEST", "IMAGE")
+    RETURN_NAMES = ("selected_image", "selected_batch", "selected_mask", "selected_meta", "board_manifest", "board_preview")
+    FUNCTION = "process"
+    CATEGORY = "Storyboard"
+
+    def process(self, action="none", target_id="", board_id="default", version=0, images=None, manifest_in=None):
+        board_data = store.get_board(board_id)
+        
+        if action == "clear":
+            board_data["items"] = []
+            board_data["selection"] = []
+            store.save_board(board_data)
+        
+        # Return currently selected images and manifest
+        # (This is a simplified implementation for v1)
+        dummy_image = torch.zeros((1, 64, 64, 3))
+        dummy_mask = torch.zeros((1, 64, 64))
+        dummy_json = {}
+        
+        return (dummy_image, dummy_image, dummy_mask, dummy_json, board_data, dummy_image)
+
+class StoryboardSend:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "board_id": ("STRING", {"default": "default"}),
+                "target_mode": (["selected", "placeholder_id", "tag", "new_item"], {"default": "selected"}),
+                "target": ("STRING", {"default": ""}),
+                "label": ("STRING", {"default": ""}),
+                "tags": ("STRING", {"default": ""}),
+                "append_mode": (["replace", "append"], {"default": "replace"}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "STORYBOARD_MANIFEST")
+    RETURN_NAMES = ("passthrough_image", "updated_manifest")
+    FUNCTION = "send"
+    CATEGORY = "Storyboard"
+
+    def send(self, images, board_id, target_mode, target, label, tags, append_mode):
+        board_data = store.get_board(board_id)
+        selection = board_data.get("selection", [])
+        items = board_data.get("items", [])
+        
+        # Save images to assets
+        filenames = []
+        for i in range(images.shape[0]):
+            img_tensor = images[i].unsqueeze(0)
+            filename = store.add_asset(board_id, img_tensor)
+            filenames.append(filename)
+            
+        if target_mode == "selected" and selection:
+            # Map batch items to selected items
+            for i in range(len(filenames)):
+                filename = filenames[i]
+                if i < len(selection):
+                    # Replace existing item
+                    item_id = selection[i]
+                    for item in items:
+                        if item["id"] == item_id:
+                            item["image_ref"] = filename
+                            item["type"] = "image"
+                            item["label"] = label or item.get("label", "Updated")
+                            item["tags"] = list(set(item.get("tags", []) + (tags.split(",") if tags else [])))
+                            break
+                else:
+                    # Append new items nearby the first selection
+                    # Find first selected item's position
+                    first_item = next((it for it in items if it["id"] == selection[0]), None)
+                    if first_item:
+                        new_item = {
+                            "id": str(uuid.uuid4()),
+                            "type": "image",
+                            "x": first_item["x"] + first_item["w"] + 20 + (i * 10),
+                            "y": first_item["y"] + (i * 10),
+                            "w": first_item["w"],
+                            "h": first_item["h"],
+                            "label": label or "Batch variant",
+                            "tags": tags.split(",") if tags else [],
+                            "image_ref": filename
+                        }
+                        items.append(new_item)
+        elif target_mode == "selected" and not selection:
+            # Fallback: create new items in a row if nothing selected
+            last_item = items[-1] if items else {"x": 0, "y": 0, "w": 512, "h": 512}
+            for i, filename in enumerate(filenames):
+                new_item = {
+                    "id": str(uuid.uuid4()),
+                    "type": "image",
+                    "x": last_item["x"] + last_item["w"] + 20 + (i * 532),
+                    "y": last_item["y"],
+                    "w": 512,
+                    "h": 512,
+                    "label": label or "Generated",
+                    "tags": tags.split(",") if tags else [],
+                    "image_ref": filename
+                }
+                items.append(new_item)
+        elif target_mode == "placeholder_id" and target:
+            # Find the placeholder with the given ID
+            for item in items:
+                if item["id"] == target:
+                    item["image_ref"] = filenames[0]
+                    item["type"] = "image"
+                    item["label"] = label or item.get("label", "")
+                    item["tags"] = list(set(item.get("tags", []) + (tags.split(",") if tags else [])))
+                    break
+        elif target_mode == "tag" and target:
+            # Find items with the given tag
+            for item in items:
+                if target in item.get("tags", []):
+                    item["image_ref"] = filenames[0]
+                    item["type"] = "image"
+                    item["label"] = label or item.get("label", "")
+                    break
+        else:
+            # Default to new items
+            for filename in filenames:
+                new_item = {
+                    "id": str(uuid.uuid4()),
+                    "type": "image",
+                    "x": 0, "y": 0, "w": 512, "h": 512,
+                    "label": label,
+                    "tags": tags.split(",") if tags else [],
+                    "image_ref": filename
+                }
+                items.append(new_item)
+        
+        board_data["items"] = items
+        store.save_board(board_data)
+        return (images, board_data)
+
+class StoryboardRead:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "board_manifest": ("STORYBOARD_MANIFEST",),
+                "read_mode": (["first_selected", "all_selected_batch", "by_tag", "ordered_by_board", "flattened_board"], {"default": "first_selected"}),
+                "tag_filter": ("STRING", {"default": ""}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "JSON", "STRING")
+    RETURN_NAMES = ("image", "metadata", "ordering")
+    FUNCTION = "read"
+    CATEGORY = "Storyboard"
+
+    def read(self, board_manifest, read_mode, tag_filter):
+        items = board_manifest.get("items", [])
+        selection = board_manifest.get("selection", [])
+        board_id = board_manifest.get("board_id")
+        
+        filtered_items = []
+        if read_mode == "first_selected" and selection:
+            filtered_items = [next((item for item in items if item["id"] == selection[0]), None)]
+        elif read_mode == "all_selected_batch" and selection:
+            filtered_items = [item for item in items if item["id"] in selection]
+        elif read_mode == "by_tag":
+            filtered_items = [item for item in items if tag_filter in item.get("tags", [])]
+        else:
+            # Default to all items
+            filtered_items = items
+            
+        filtered_items = [item for item in filtered_items if item and item.get("image_ref")]
+        
+        if not filtered_items:
+            dummy_image = torch.zeros((1, 64, 64, 3))
+            return (dummy_image, {}, "")
+            
+        # Load images
+        images = []
+        for item in filtered_items:
+            img_path = os.path.join(store._get_assets_path(board_id), item["image_ref"])
+            if os.path.exists(img_path):
+                img = Image.open(img_path).convert("RGB")
+                img_np = np.array(img).astype(np.float32) / 255.0
+                images.append(torch.from_numpy(img_np))
+        
+        if not images:
+            dummy_image = torch.zeros((1, 64, 64, 3))
+            return (dummy_image, {}, "")
+            
+        # Stack images into a batch
+        # Ensure all images are same size for batching (simple approach: resize to first)
+        target_size = images[0].shape[:2]
+        resized_images = []
+        for img in images:
+            if img.shape[:2] != target_size:
+                # Resize logic needed here if we want to batch differently sized images
+                pass
+            resized_images.append(img.unsqueeze(0))
+            
+        batch = torch.cat(resized_images, dim=0)
+        metadata = {"items": filtered_items}
+        ordering = ",".join([item["id"] for item in filtered_items])
+        
+        return (batch, metadata, ordering)
+
+class StoryboardSlot:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "name": ("STRING", {"default": "Slot 1"}),
+                "id": ("STRING", {"default": "slot_01"}),
+                "tags": ("STRING", {"default": ""}),
+            }
+        }
+
+    RETURN_TYPES = ("STORYBOARD_SLOT",)
+    RETURN_NAMES = ("slot_data",)
+    FUNCTION = "create_slot"
+    CATEGORY = "Storyboard"
+
+    def create_slot(self, name, id, tags):
+        return ({"name": name, "id": id, "tags": tags},)
