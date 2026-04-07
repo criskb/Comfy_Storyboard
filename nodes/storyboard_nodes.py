@@ -96,6 +96,21 @@ class StoryboardSend:
             filename = store.add_asset(board_id, img_tensor)
             filenames.append(filename)
             
+        def create_new_at_end(fname, idx, base_label="Generated"):
+            # Find a good spot for the new item
+            last_item = items[-1] if items else {"x": 0, "y": 0, "w": 512, "h": 512}
+            return {
+                "id": str(uuid.uuid4()),
+                "type": "image",
+                "x": last_item["x"] + last_item["w"] + 20 + (idx * 532),
+                "y": last_item["y"],
+                "w": 512,
+                "h": 512,
+                "label": label or base_label,
+                "tags": tags.split(",") if tags else [],
+                "image_ref": fname
+            }
+
         if target_mode == "selected" and selection:
             # Map batch items to selected items
             for i in range(len(filenames)):
@@ -112,14 +127,13 @@ class StoryboardSend:
                             break
                 else:
                     # Append new items nearby the first selection
-                    # Find first selected item's position
                     first_item = next((it for it in items if it["id"] == selection[0]), None)
                     if first_item:
                         new_item = {
                             "id": str(uuid.uuid4()),
                             "type": "image",
-                            "x": first_item["x"] + first_item["w"] + 20 + (i * 10),
-                            "y": first_item["y"] + (i * 10),
+                            "x": first_item["x"] + first_item["w"] + 20 + ((i - len(selection)) * 10),
+                            "y": first_item["y"] + ((i - len(selection)) * 10),
                             "w": first_item["w"],
                             "h": first_item["h"],
                             "label": label or "Batch variant",
@@ -127,51 +141,73 @@ class StoryboardSend:
                             "image_ref": filename
                         }
                         items.append(new_item)
-        elif target_mode == "selected" and not selection:
-            # Fallback: create new items in a row if nothing selected
-            last_item = items[-1] if items else {"x": 0, "y": 0, "w": 512, "h": 512}
-            for i, filename in enumerate(filenames):
-                new_item = {
-                    "id": str(uuid.uuid4()),
-                    "type": "image",
-                    "x": last_item["x"] + last_item["w"] + 20 + (i * 532),
-                    "y": last_item["y"],
-                    "w": 512,
-                    "h": 512,
-                    "label": label or "Generated",
-                    "tags": tags.split(",") if tags else [],
-                    "image_ref": filename
-                }
-                items.append(new_item)
+
         elif target_mode == "placeholder_id" and target:
             # Find the placeholder with the given ID
+            found = False
             for item in items:
                 if item["id"] == target:
                     item["image_ref"] = filenames[0]
                     item["type"] = "image"
                     item["label"] = label or item.get("label", "")
                     item["tags"] = list(set(item.get("tags", []) + (tags.split(",") if tags else [])))
+                    
+                    # Handle extra images in batch
+                    if len(filenames) > 1 and append_mode == "append":
+                        for i, fname in enumerate(filenames[1:]):
+                            new_item = {
+                                "id": str(uuid.uuid4()),
+                                "type": "image",
+                                "x": item["x"] + item["w"] + 20 + (i * 10),
+                                "y": item["y"] + (i * 10),
+                                "w": item["w"],
+                                "h": item["h"],
+                                "label": label or "Variant",
+                                "tags": tags.split(",") if tags else [],
+                                "image_ref": fname
+                            }
+                            items.append(new_item)
+                    found = True
                     break
+            if not found:
+                # If placeholder ID not found, treat as new items
+                for i, filename in enumerate(filenames):
+                    items.append(create_new_at_end(filename, i))
+
         elif target_mode == "tag" and target:
             # Find items with the given tag
-            for item in items:
-                if target in item.get("tags", []):
-                    item["image_ref"] = filenames[0]
-                    item["type"] = "image"
-                    item["label"] = label or item.get("label", "")
-                    break
+            tag_items = [it for it in items if target in it.get("tags", [])]
+            if tag_items:
+                for i, filename in enumerate(filenames):
+                    if i < len(tag_items):
+                        it = tag_items[i]
+                        it["image_ref"] = filename
+                        it["type"] = "image"
+                        it["label"] = label or it.get("label", "")
+                    elif append_mode == "append":
+                        # Append extras near the last tagged item
+                        last_tag_item = tag_items[-1]
+                        new_item = {
+                            "id": str(uuid.uuid4()),
+                            "type": "image",
+                            "x": last_tag_item["x"] + last_tag_item["w"] + 20 + ((i - len(tag_items)) * 10),
+                            "y": last_tag_item["y"] + ((i - len(tag_items)) * 10),
+                            "w": last_tag_item["w"],
+                            "h": last_tag_item["h"],
+                            "label": label or "Tagged variant",
+                            "tags": tags.split(",") if tags else [target],
+                            "image_ref": filename
+                        }
+                        items.append(new_item)
+            else:
+                # If no items with tag found, create new items with the tag
+                for i, filename in enumerate(filenames):
+                    items.append(create_new_at_end(filename, i, base_label=f"Tag: {target}"))
+
         else:
-            # Default to new items
-            for filename in filenames:
-                new_item = {
-                    "id": str(uuid.uuid4()),
-                    "type": "image",
-                    "x": 0, "y": 0, "w": 512, "h": 512,
-                    "label": label,
-                    "tags": tags.split(",") if tags else [],
-                    "image_ref": filename
-                }
-                items.append(new_item)
+            # target_mode == "new_item" or fallback
+            for i, filename in enumerate(filenames):
+                items.append(create_new_at_end(filename, i))
         
         board_data["items"] = items
         store.save_board(board_data)
