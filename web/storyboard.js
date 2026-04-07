@@ -4,7 +4,7 @@ import { api } from "../../scripts/api.js";
 // Load CSS
 const link = document.createElement("link");
 link.rel = "stylesheet";
-link.href = "/extensions/Storyboard/storyboard.css";
+link.href = new URL("./storyboard.css", import.meta.url).href;
 document.head.appendChild(link);
 
 // Main Storyboard Workspace Extension
@@ -17,20 +17,13 @@ app.registerExtension({
             }
         });
     },
-    async beforeRegisterNodeDef(nodeData, nodeDef, app) {
-        if (nodeData.name === "Storyboard") {
-            // Add custom widgets or buttons to the Storyboard node
-            const onNodeCreated = nodeDef.prototype.onNodeCreated;
-            nodeDef.prototype.onNodeCreated = function () {
-                const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
-
-                this.addWidget("button", "Open Storyboard", "open", () => {
-                    const boardId = this.widgets.find(w => w.name === "board_id")?.value || "default";
-                    StoryboardWorkspace.open(boardId, this);
-                });
-
-                return r;
-            };
+    async nodeCreated(node) {
+        if (node.comfyClass === "Storyboard") {
+            // Add custom button to the Storyboard node
+            node.addWidget("button", "Open Storyboard", "open", () => {
+                const boardId = node.widgets.find(w => w.name === "board_id")?.value || "default";
+                StoryboardWorkspace.open(boardId, node);
+            });
         }
     }
 });
@@ -75,15 +68,6 @@ class StoryboardWorkspace {
             </div>
         `;
         
-        this.canvasContainer = document.createElement("div");
-        this.canvasContainer.className = "storyboard-canvas-container";
-        
-        this.canvas = document.createElement("div");
-        this.canvas.className = "storyboard-canvas";
-        
-        this.canvasContainer.appendChild(this.canvas);
-        this.window.appendChild(header);
-        
         const main = document.createElement("div");
         main.className = "storyboard-main";
         
@@ -103,6 +87,8 @@ class StoryboardWorkspace {
         this.canvasContainer.appendChild(this.canvas);
         main.appendChild(this.canvasContainer);
         main.appendChild(this.inspector);
+        
+        this.window.appendChild(header);
         this.window.appendChild(main);
         
         this.contextMenu = document.createElement("div");
