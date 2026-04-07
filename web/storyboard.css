@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@700&display=swap');
+
 .storyboard-overlay {
     position: fixed;
     top: 0;
@@ -238,6 +240,23 @@
     display: block;
 }
 
+.storyboard-ref-pill {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: #2196F3;
+    color: white;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-family: 'Roboto', sans-serif;
+    font-weight: 700;
+    font-size: 0.8em;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    z-index: 5;
+    pointer-events: none;
+    text-transform: uppercase;
+}
+
 .storyboard-item img {
     width: 100%;
     height: 100%;
@@ -265,7 +284,8 @@
 }
 
 .note-content {
-    font-family: 'Comic Sans MS', cursive, sans-serif;
+    font-family: 'Roboto', sans-serif;
+    font-weight: 700;
     font-size: 1.1em;
     white-space: pre-wrap;
     word-wrap: break-word;

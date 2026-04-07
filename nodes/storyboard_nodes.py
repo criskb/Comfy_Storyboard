@@ -24,8 +24,8 @@ class Storyboard:
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "MASK", "JSON", "STORYBOARD_MANIFEST", "IMAGE", "CONDITIONING")
-    RETURN_NAMES = ("selected_image", "selected_batch", "selected_mask", "selected_meta", "board_manifest", "board_preview", "conditioning")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "MASK", "JSON", "STORYBOARD_MANIFEST", "IMAGE", "CONDITIONING", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE")
+    RETURN_NAMES = ("selected_image", "selected_batch", "selected_mask", "selected_meta", "board_manifest", "board_preview", "conditioning", "ref_1", "ref_2", "ref_3", "ref_4", "ref_5", "ref_6", "ref_7", "ref_8")
     FUNCTION = "process"
     CATEGORY = "Storyboard"
 
@@ -44,13 +44,25 @@ class Storyboard:
             cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
             conditioning = [[cond, {"pooled_output": pooled}]]
         
+        # Reference images
+        refs = [torch.zeros((1, 64, 64, 3)) for _ in range(8)]
+        items = board_data.get("items", [])
+        for item in items:
+            ref_idx = item.get("ref_id")
+            if ref_idx and 1 <= ref_idx <= 8 and item.get("image_ref"):
+                img_path = os.path.join(store._get_assets_path(board_id), item["image_ref"])
+                if os.path.exists(img_path):
+                    img = Image.open(img_path).convert("RGB")
+                    img_np = np.array(img).astype(np.float32) / 255.0
+                    refs[ref_idx - 1] = torch.from_numpy(img_np).unsqueeze(0)
+        
         # Return currently selected images and manifest
         # (This is a simplified implementation for v1)
         dummy_image = torch.zeros((1, 64, 64, 3))
         dummy_mask = torch.zeros((1, 64, 64))
         dummy_json = {}
         
-        return (dummy_image, dummy_image, dummy_mask, dummy_json, board_data, dummy_image, conditioning)
+        return (dummy_image, dummy_image, dummy_mask, dummy_json, board_data, dummy_image, conditioning, *refs)
 
 class StoryboardSend:
     @classmethod

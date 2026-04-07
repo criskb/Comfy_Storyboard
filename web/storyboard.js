@@ -45,6 +45,23 @@ class StoryboardWorkspace {
         this.boardData = null;
         this.scale = 1;
         this.offset = { x: 0, y: 0 };
+
+        // Global shortcuts
+        window.addEventListener("keydown", (e) => {
+            if (this.overlay.style.display === "flex") {
+                if (e.key === "Delete") {
+                    const focused = document.activeElement;
+                    if (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA") return;
+                    
+                    if (this.boardData.selection.length > 0) {
+                        this.boardData.items = this.boardData.items.filter(i => !this.boardData.selection.includes(i.id));
+                        this.boardData.selection = [];
+                        this.renderBoard();
+                        this.saveBoard();
+                    }
+                }
+            }
+        });
     }
 
     createWindow() {
@@ -296,6 +313,16 @@ class StoryboardWorkspace {
         }
     }
 
+    getContrastColor(hexcolor) {
+        if (!hexcolor) return "#333";
+        // If hexcolor is something like "#ffeb3b"
+        const r = parseInt(hexcolor.slice(1, 3), 16);
+        const g = parseInt(hexcolor.slice(3, 5), 16);
+        const b = parseInt(hexcolor.slice(5, 7), 16);
+        const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+        return (yiq >= 128) ? "#000" : "#fff";
+    }
+
     renderBoard() {
         this.canvas.innerHTML = "";
         this.boardData.items.forEach(item => {
@@ -310,6 +337,14 @@ class StoryboardWorkspace {
             el.style.width = `${item.w}px`;
             el.style.height = `${item.h}px`;
             
+            // Reference Pill
+            if (item.ref_id) {
+                const pill = document.createElement("div");
+                pill.className = "storyboard-ref-pill";
+                pill.innerText = `REF ${item.ref_id}`;
+                el.appendChild(pill);
+            }
+
             // Resize handle
             const resizeHandle = document.createElement("div");
             resizeHandle.className = "storyboard-resize-handle";
@@ -418,7 +453,9 @@ class StoryboardWorkspace {
                 el.appendChild(label);
             } else if (item.type === "note") {
                 el.classList.add("note-item");
-                el.style.backgroundColor = item.color || "#ffeb3b";
+                const bgColor = item.color || "#ffeb3b";
+                el.style.backgroundColor = bgColor;
+                el.style.color = this.getContrastColor(bgColor);
                 const content = document.createElement("div");
                 content.className = "note-content";
                 content.innerText = item.content || "";
@@ -817,6 +854,37 @@ class StoryboardWorkspace {
         if (this.boardData.selection.length > 0) {
             actions.push({ label: "Bring to Front", action: () => document.getElementById("action-front")?.click() });
             actions.push({ label: "Send to Back", action: () => document.getElementById("action-back")?.click() });
+            
+            if (this.boardData.selection.length === 1) {
+                const item = this.boardData.items.find(i => i.id === this.boardData.selection[0]);
+                if (item.type === "image" || item.type === "frame") {
+                    for (let i = 1; i <= 8; i++) {
+                        actions.push({ 
+                            label: `Set as Ref ${i}`, 
+                            action: () => {
+                                // Clear this ref from any other item first
+                                this.boardData.items.forEach(it => {
+                                    if (it.ref_id === i) delete it.ref_id;
+                                });
+                                item.ref_id = i;
+                                this.renderBoard();
+                                this.saveBoard();
+                            } 
+                        });
+                    }
+                    if (item.ref_id) {
+                        actions.push({ 
+                            label: "Clear Reference", 
+                            action: () => {
+                                delete item.ref_id;
+                                this.renderBoard();
+                                this.saveBoard();
+                            } 
+                        });
+                    }
+                }
+            }
+
             actions.push({ label: "Delete", action: () => {
                 if (this.boardData.selection.length === 1) document.getElementById("action-delete")?.click();
                 else document.getElementById("action-delete-selected")?.click();
