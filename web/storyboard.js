@@ -51,6 +51,7 @@ class StoryboardWorkspace {
         this.boardData = null;
         this.scale = 1;
         this.offset = { x: 0, y: 0 };
+        this.itemElements = new Map();
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
