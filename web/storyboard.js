@@ -342,7 +342,14 @@ class StoryboardWorkspace {
 
     renderBoard() {
         this.canvas.innerHTML = "";
-        this.boardData.items.forEach(item => {
+        // Sort items so frames are always in the back
+        const sortedItems = [...this.boardData.items].sort((a, b) => {
+            if (a.type === "frame" && b.type !== "frame") return -1;
+            if (a.type !== "frame" && b.type === "frame") return 1;
+            return 0;
+        });
+
+        sortedItems.forEach(item => {
             const el = document.createElement("div");
             el._itemId = item.id;
             el.className = "storyboard-item";
@@ -428,7 +435,25 @@ class StoryboardWorkspace {
                 // Dragging logic
                 const startX = e.clientX;
                 const startY = e.clientY;
-                const selectedElements = this.boardData.selection.map(id => {
+                
+                // Find all items to move (selection + items inside selected frames)
+                const itemsToMove = new Set(this.boardData.selection);
+                this.boardData.selection.forEach(id => {
+                    const item = this.boardData.items.find(i => i.id === id);
+                    if (item && item.type === "frame") {
+                        // Find items inside this frame
+                        this.boardData.items.forEach(other => {
+                            if (other.id !== item.id &&
+                                other.x >= item.x && other.y >= item.y &&
+                                (other.x + other.w) <= (item.x + item.w) &&
+                                (other.y + other.h) <= (item.y + item.h)) {
+                                itemsToMove.add(other.id);
+                            }
+                        });
+                    }
+                });
+
+                const selectedElements = Array.from(itemsToMove).map(id => {
                     const it = this.boardData.items.find(i => i.id === id);
                     const domEl = Array.from(this.canvas.children).find(child => child._itemId === id);
                     return { item: it, domEl, startX: it.x, startY: it.y };

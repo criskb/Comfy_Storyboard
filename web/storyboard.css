@@ -327,6 +327,11 @@
     background: rgba(76, 175, 80, 0.05);
     pointer-events: auto;
     border-radius: 6px;
+    z-index: 1;
+}
+
+.storyboard-item:not(.frame-item) {
+    z-index: 10;
 }
 
 .frame-label {
