@@ -58,7 +58,13 @@ class StoryboardWorkspace {
         const header = document.createElement("div");
         header.className = "storyboard-header";
         header.innerHTML = `
-            <span>Storyboard Workspace</span>
+            <div class="storyboard-header-left">
+                <span>Storyboard:</span>
+                <select id="storyboard-selector"></select>
+                <button id="storyboard-new-board" title="New Board">➕</button>
+                <button id="storyboard-rename-board" title="Rename Board">✏️</button>
+                <button id="storyboard-delete-board" class="danger" title="Delete Board">🗑️</button>
+            </div>
             <div class="storyboard-controls">
                 <button id="storyboard-add-slot">+ Add Slot</button>
                 <button id="storyboard-add-note">+ Add Note</button>
@@ -100,6 +106,40 @@ class StoryboardWorkspace {
         document.body.appendChild(this.overlay);
 
         document.getElementById("storyboard-close").onclick = () => this.hide();
+        
+        this.boardSelector = document.getElementById("storyboard-selector");
+        this.boardSelector.onchange = (e) => this.show(e.target.value, this.node);
+
+        document.getElementById("storyboard-new-board").onclick = async () => {
+            const name = prompt("Enter new storyboard name:");
+            if (name) {
+                this.show(name, this.node);
+            }
+        };
+
+        document.getElementById("storyboard-rename-board").onclick = async () => {
+            const newName = prompt("Enter new name for this storyboard:", this.boardId);
+            if (newName && newName !== this.boardId) {
+                const response = await fetch(`/mkr/storyboard/${this.boardId}/rename/${newName}`, { method: "POST" });
+                const result = await response.json();
+                if (result.status === "ok") {
+                    this.show(newName, this.node);
+                } else {
+                    alert("Rename failed. Name might already exist.");
+                }
+            }
+        };
+
+        document.getElementById("storyboard-delete-board").onclick = async () => {
+            if (confirm(`Are you sure you want to delete the storyboard "${this.boardId}"? This cannot be undone.`)) {
+                const response = await fetch(`/mkr/storyboard/${this.boardId}`, { method: "DELETE" });
+                const result = await response.json();
+                if (result.status === "ok") {
+                    this.show("default", this.node);
+                }
+            }
+        };
+
         document.getElementById("storyboard-add-slot").onclick = () => {
             this.boardData.items.push({
                 id: `slot_${Date.now()}`,
@@ -161,7 +201,40 @@ class StoryboardWorkspace {
         this.boardId = boardId;
         this.node = node;
         this.overlay.style.display = "flex";
+        
+        // Sync node widget if it exists
+        if (this.node) {
+            const boardIdWidget = this.node.widgets.find(w => w.name === "board_id");
+            if (boardIdWidget && boardIdWidget.value !== this.boardId) {
+                boardIdWidget.value = this.boardId;
+            }
+        }
+
         await this.loadBoard();
+        await this.refreshBoardList();
+    }
+
+    async refreshBoardList() {
+        const response = await fetch("/mkr/storyboard/list");
+        const { boards } = await response.json();
+        
+        this.boardSelector.innerHTML = "";
+        boards.forEach(b => {
+            const opt = document.createElement("option");
+            opt.value = b;
+            opt.innerText = b;
+            if (b === this.boardId) opt.selected = true;
+            this.boardSelector.appendChild(opt);
+        });
+
+        // Ensure current board is in the list even if it's new
+        if (!boards.includes(this.boardId)) {
+            const opt = document.createElement("option");
+            opt.value = this.boardId;
+            opt.innerText = this.boardId;
+            opt.selected = true;
+            this.boardSelector.appendChild(opt);
+        }
     }
 
     hide() {

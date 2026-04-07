@@ -79,6 +79,35 @@ class StoryboardStore:
         
         return filename
 
+    def list_boards(self):
+        if not os.path.exists(self.base_path):
+            return []
+        boards = []
+        for d in os.listdir(self.base_path):
+            if os.path.isdir(os.path.join(self.base_path, d)):
+                boards.append(d)
+        return boards
+
+    def delete_board(self, board_id):
+        import shutil
+        board_path = self._get_board_path(board_id)
+        if os.path.exists(board_path):
+            shutil.rmtree(board_path)
+            return True
+        return False
+
+    def rename_board(self, old_id, new_id):
+        old_path = self._get_board_path(old_id)
+        new_path = self._get_board_path(new_id)
+        if os.path.exists(old_path) and not os.path.exists(new_path):
+            os.rename(old_path, new_path)
+            # Update board_id in the json
+            board_data = self.get_board(new_id)
+            board_data["board_id"] = new_id
+            self.save_board(board_data, notify=True)
+            return True
+        return False
+
 # Global instance
 STORYBOARD_DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "storyboards")
 store = StoryboardStore(STORYBOARD_DATA_PATH)

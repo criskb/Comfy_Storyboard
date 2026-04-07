@@ -12,6 +12,24 @@ class StoryboardAPI:
     def register_routes():
         server = PromptServer.instance
         
+        @server.routes.get("/mkr/storyboard/list")
+        async def list_boards(request):
+            boards = store.list_boards()
+            return web.json_response({"boards": boards})
+
+        @server.routes.delete("/mkr/storyboard/{board_id}")
+        async def delete_board(request):
+            board_id = request.match_info["board_id"]
+            success = store.delete_board(board_id)
+            return web.json_response({"status": "ok" if success else "error"})
+
+        @server.routes.post("/mkr/storyboard/{old_id}/rename/{new_id}")
+        async def rename_board(request):
+            old_id = request.match_info["old_id"]
+            new_id = request.match_info["new_id"]
+            success = store.rename_board(old_id, new_id)
+            return web.json_response({"status": "ok" if success else "error"})
+
         @server.routes.get("/mkr/storyboard/{board_id}")
         async def get_board(request):
             board_id = request.match_info["board_id"]
