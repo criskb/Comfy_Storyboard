@@ -52,6 +52,7 @@ class StoryboardWorkspace {
         this.scale = 1;
         this.offset = { x: 0, y: 0 };
         this.itemElements = new Map();
+        this.isInteracting = false;
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
@@ -247,6 +248,13 @@ class StoryboardWorkspace {
     }
 
     async show(boardId, node) {
+        // Clear cache when switching boards
+        if (this.boardId !== boardId) {
+            this.itemElements.forEach(el => el.remove());
+            this.itemElements.clear();
+            this.canvas.innerHTML = "";
+        }
+        
         this.boardId = boardId;
         this.node = node;
         this.overlay.style.display = "flex";
@@ -292,6 +300,7 @@ class StoryboardWorkspace {
     }
 
     async loadBoard() {
+        if (this.isInteracting) return;
         const response = await fetch(`/mkr/storyboard/${this.boardId}?t=${Date.now()}`);
         this.boardData = await response.json();
         console.log("Storyboard loaded:", this.boardData);
@@ -356,7 +365,7 @@ class StoryboardWorkspace {
             }
         }
 
-        this.boardData.items.forEach(item => {
+        this.boardData.items.forEach((item, index) => {
             let el = this.itemElements.get(item.id);
             let isNew = false;
             
@@ -380,7 +389,10 @@ class StoryboardWorkspace {
             el.style.top = `${item.y}px`;
             el.style.width = `${item.w}px`;
             el.style.height = `${item.h}px`;
-            el.style.zIndex = item.type === "frame" ? "1" : "10";
+            
+            // Ensure frames are behind other items, but keep order within groups
+            const baseZ = item.type === "frame" ? 100 : 1000;
+            el.style.zIndex = (baseZ + index).toString();
             
             // Update item-type specific content
             this.updateItemContent(el, item, isNew);
@@ -396,6 +408,7 @@ class StoryboardWorkspace {
         resizeHandle.onmousedown = (e) => {
             e.stopPropagation();
             e.preventDefault();
+            this.isInteracting = true;
             const startX = e.clientX;
             const startY = e.clientY;
             const startW = item.w;
@@ -429,6 +442,7 @@ class StoryboardWorkspace {
             };
 
             const onMouseUp = () => {
+                this.isInteracting = false;
                 window.removeEventListener("mousemove", onMouseMove);
                 window.removeEventListener("mouseup", onMouseUp);
                 this.saveBoard();
@@ -444,6 +458,7 @@ class StoryboardWorkspace {
             if (e.button !== 0) return;
             e.stopPropagation();
             e.preventDefault();
+            this.isInteracting = true;
             
             if (!e.shiftKey && !this.boardData.selection.includes(item.id)) {
                 this.boardData.selection = [item.id];
@@ -493,6 +508,7 @@ class StoryboardWorkspace {
             };
 
             const onMouseUp = () => {
+                this.isInteracting = false;
                 window.removeEventListener("mousemove", onMouseMove);
                 window.removeEventListener("mouseup", onMouseUp);
                 this.saveBoard();
@@ -570,8 +586,6 @@ class StoryboardWorkspace {
             label.innerText = item.label || "";
             label.style.backgroundColor = item.color || "#4CAF50";
         }
-    }
-        this.renderInspector();
     }
 
     renderInspector() {
@@ -855,6 +869,7 @@ class StoryboardWorkspace {
         this.canvasContainer.onmousedown = (e) => {
             if (e.button === 1 || (e.button === 0 && e.altKey)) {
                 isPanning = true;
+                this.isInteracting = true;
                 startPos = { x: e.clientX - this.offset.x, y: e.clientY - this.offset.y };
             }
         };
@@ -869,6 +884,7 @@ class StoryboardWorkspace {
 
         window.onmouseup = () => {
             isPanning = false;
+            this.isInteracting = false;
         };
 
         this.canvasContainer.onwheel = (e) => {
