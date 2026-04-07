@@ -171,6 +171,7 @@
     height: 100%;
     object-fit: cover;
     display: block;
+    border-radius: 6px;
 }
 
 .storyboard-item.slot-item {
@@ -179,6 +180,7 @@
     display: flex;
     justify-content: center;
     align-items: center;
+    border-radius: 6px;
 }
 
 .storyboard-item.note-item {
@@ -187,6 +189,7 @@
     padding: 15px;
     box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
     border: none;
+    border-radius: 4px;
 }
 
 .note-content {
@@ -231,6 +234,7 @@
     border: 2px solid #4CAF50;
     background: rgba(76, 175, 80, 0.05);
     pointer-events: auto;
+    border-radius: 6px;
 }
 
 .frame-label {
