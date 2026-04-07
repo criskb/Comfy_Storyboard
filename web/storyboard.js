@@ -196,6 +196,7 @@ class StoryboardWorkspace {
         this.canvas.innerHTML = "";
         this.boardData.items.forEach(item => {
             const el = document.createElement("div");
+            el._itemId = item.id;
             el.className = "storyboard-item";
             if (this.boardData.selection.includes(item.id)) {
                 el.classList.add("selected");
@@ -221,13 +222,15 @@ class StoryboardWorkspace {
                     const dh = (moveEvent.clientY - startY) / this.scale;
                     item.w = Math.max(50, startW + dw);
                     item.h = Math.max(50, startH + dh);
-                    this.renderBoard();
+                    el.style.width = `${item.w}px`;
+                    el.style.height = `${item.h}px`;
                 };
 
                 const onMouseUp = () => {
                     window.removeEventListener("mousemove", onMouseMove);
                     window.removeEventListener("mouseup", onMouseUp);
                     this.saveBoard();
+                    this.renderBoard(); // Final sync and update inspector
                 };
 
                 window.addEventListener("mousemove", onMouseMove);
@@ -238,8 +241,9 @@ class StoryboardWorkspace {
             el.onmousedown = (e) => {
                 if (e.button !== 0) return;
                 e.stopPropagation();
+                e.preventDefault(); // Prevent browser default drag behavior
                 
-                // Selection logic moved to onmousedown for better feel
+                // Selection logic
                 if (!e.shiftKey && !this.boardData.selection.includes(item.id)) {
                     this.boardData.selection = [item.id];
                 } else if (e.shiftKey) {
@@ -254,27 +258,29 @@ class StoryboardWorkspace {
                 // Dragging logic
                 const startX = e.clientX;
                 const startY = e.clientY;
-                const initialItems = this.boardData.selection.map(id => {
+                const selectedElements = this.boardData.selection.map(id => {
                     const it = this.boardData.items.find(i => i.id === id);
-                    return { id: it.id, x: it.x, y: it.y };
-                });
+                    const domEl = Array.from(this.canvas.children).find(child => child._itemId === id);
+                    return { item: it, domEl, startX: it.x, startY: it.y };
+                }).filter(entry => entry.domEl);
 
                 const onMouseMove = (moveEvent) => {
                     const dx = (moveEvent.clientX - startX) / this.scale;
                     const dy = (moveEvent.clientY - startY) / this.scale;
 
-                    initialItems.forEach(init => {
-                        const it = this.boardData.items.find(i => i.id === init.id);
-                        it.x = init.x + dx;
-                        it.y = init.y + dy;
+                    selectedElements.forEach(entry => {
+                        entry.item.x = entry.startX + dx;
+                        entry.item.y = entry.startY + dy;
+                        entry.domEl.style.left = `${entry.item.x}px`;
+                        entry.domEl.style.top = `${entry.item.y}px`;
                     });
-                    this.renderBoard();
                 };
 
                 const onMouseUp = () => {
                     window.removeEventListener("mousemove", onMouseMove);
                     window.removeEventListener("mouseup", onMouseUp);
                     this.saveBoard();
+                    this.renderBoard(); // Final sync and update inspector
                 };
 
                 window.addEventListener("mousemove", onMouseMove);
@@ -284,6 +290,7 @@ class StoryboardWorkspace {
             if (item.type === "image") {
                 const img = document.createElement("img");
                 img.src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}`;
+                img.draggable = false; // Prevent browser ghost drag
                 el.appendChild(img);
             } else if (item.type === "slot") {
                 el.classList.add("slot-item");
