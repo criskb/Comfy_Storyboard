@@ -1,11 +1,5 @@
-import os
-import sys
-
-# Add the current directory to sys.path so we can import from 'nodes'
-sys.path.append(os.path.dirname(__file__))
-
-from nodes.storyboard_nodes import Storyboard, StoryboardSend, StoryboardRead, StoryboardSlot
-import nodes.storyboard_api # Register API routes
+from .nodes.storyboard_nodes import Storyboard, StoryboardSend, StoryboardRead, StoryboardSlot
+from .nodes import storyboard_api # Register API routes
 
 NODE_CLASS_MAPPINGS = {
     "Storyboard": Storyboard,
