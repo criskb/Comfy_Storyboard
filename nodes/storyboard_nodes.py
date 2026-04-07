@@ -8,6 +8,10 @@ from .storyboard_store import store
 
 class Storyboard:
     @classmethod
+    def IS_CHANGED(s, **kwargs):
+        return float("nan")
+
+    @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
@@ -66,6 +70,10 @@ class Storyboard:
 
 class StoryboardSend:
     @classmethod
+    def IS_CHANGED(s, **kwargs):
+        return float("nan")
+
+    @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
@@ -86,6 +94,7 @@ class StoryboardSend:
     RETURN_NAMES = ("passthrough_image", "updated_manifest")
     FUNCTION = "send"
     CATEGORY = "Storyboard"
+    OUTPUT_NODE = True
 
     def send(self, images, board_id, target_mode, target, label, tags, append_mode, manifest=None):
         if manifest and isinstance(manifest, dict) and "board_id" in manifest:
