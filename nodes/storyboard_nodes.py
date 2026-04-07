@@ -51,14 +51,28 @@ class Storyboard:
         # Reference images
         refs = [torch.zeros((1, 64, 64, 3)) for _ in range(8)]
         items = board_data.get("items", [])
+        
+        # Sort items to maintain layering during flattening
+        items = sorted(items, key=lambda x: (x.get("type") != "frame", items.index(x)))
+
         for item in items:
             ref_idx = item.get("ref_id")
-            if ref_idx and 1 <= ref_idx <= 8 and item.get("image_ref"):
+            if not ref_idx or not (1 <= ref_idx <= 8):
+                continue
+
+            img_path = None
+            if item.get("type") == "image" and item.get("image_ref"):
                 img_path = os.path.join(store._get_assets_path(board_id), item["image_ref"])
-                if os.path.exists(img_path):
-                    img = Image.open(img_path).convert("RGB")
-                    img_np = np.array(img).astype(np.float32) / 255.0
-                    refs[ref_idx - 1] = torch.from_numpy(img_np).unsqueeze(0)
+            elif item.get("type") == "frame":
+                # Automatically flatten frame
+                filename = store.flatten_frame(board_id, item["id"], scale=2.0)
+                if filename:
+                    img_path = os.path.join(store._get_assets_path(board_id), filename)
+
+            if img_path and os.path.exists(img_path):
+                img = Image.open(img_path).convert("RGB")
+                img_np = np.array(img).astype(np.float32) / 255.0
+                refs[ref_idx - 1] = torch.from_numpy(img_np).unsqueeze(0)
         
         # Return currently selected images and manifest
         # (This is a simplified implementation for v1)

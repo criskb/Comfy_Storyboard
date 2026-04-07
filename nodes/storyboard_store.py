@@ -102,7 +102,7 @@ class StoryboardStore:
             return True
         return False
 
-    def flatten_frame(self, board_id, frame_id):
+    def flatten_frame(self, board_id, frame_id, scale=2.0):
         board_data = self.get_board(board_id)
         frame = next((i for i in board_data["items"] if i["id"] == frame_id), None)
         if not frame or frame["type"] != "frame":
@@ -117,39 +117,41 @@ class StoryboardStore:
                 (item["y"] + item["h"]) <= (frame["y"] + frame["h"])):
                 contained_items.append(item)
 
-        # Create base image
-        from PIL import Image, ImageDraw
-        canvas = Image.new("RGBA", (int(frame["w"]), int(frame["h"])), (0, 0, 0, 0))
+        # Create base image with higher resolution
+        from PIL import Image, ImageDraw, ImageFont
+        canvas_w = int(frame["w"] * scale)
+        canvas_h = int(frame["h"] * scale)
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(canvas)
 
         # Draw frame background
         bg_color = frame.get("color", "#4CAF50")
         if bg_color.startswith("#"):
-            # Hex to RGB
             hex_color = bg_color.lstrip('#')
             rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-            draw.rectangle([0, 0, frame["w"], frame["h"]], fill=(*rgb, 26)) # 10% opacity
-            draw.rectangle([0, 0, frame["w"], frame["h"]], outline=(*rgb, 255), width=3)
+            draw.rectangle([0, 0, canvas_w, canvas_h], fill=(*rgb, 26)) # 10% opacity
+            draw.rectangle([0, 0, canvas_w, canvas_h], outline=(*rgb, 255), width=int(3 * scale))
 
         # Draw items in order they appear in board data
         assets_path = self._get_assets_path(board_id)
         for item in contained_items:
-            rel_x = int(item["x"] - frame["x"])
-            rel_y = int(item["y"] - frame["y"])
-            rel_w = int(item["w"])
-            rel_h = int(item["h"])
+            rel_x = int((item["x"] - frame["x"]) * scale)
+            rel_y = int((item["y"] - frame["y"]) * scale)
+            rel_w = int(item["w"] * scale)
+            rel_h = int(item["h"] * scale)
 
             if item["type"] == "image" and item.get("image_ref"):
                 img_path = os.path.join(assets_path, item["image_ref"])
                 if os.path.exists(img_path):
                     try:
                         img = Image.open(img_path).convert("RGBA")
+                        # Use LANCZOS for high quality resizing
                         img = img.resize((rel_w, rel_h), Image.Resampling.LANCZOS)
                         
-                        # Apply rounded corners to the item image
+                        # Apply rounded corners
                         mask = Image.new("L", (rel_w, rel_h), 0)
                         mask_draw = ImageDraw.Draw(mask)
-                        mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=12, fill=255)
+                        mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=int(12 * scale), fill=255)
                         
                         temp_canvas = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
                         temp_canvas.paste(img, (0, 0), mask)
@@ -164,17 +166,44 @@ class StoryboardStore:
                     
                     mask = Image.new("L", (rel_w, rel_h), 0)
                     mask_draw = ImageDraw.Draw(mask)
-                    mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=12, fill=255)
+                    mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=int(12 * scale), fill=255)
                     
                     note_img = Image.new("RGBA", (rel_w, rel_h), (*rgb, 255))
                     canvas.paste(note_img, (rel_x, rel_y), mask)
+                    
+                    # Add text to note
+                    content = item.get("content", "")
+                    if content:
+                        note_draw = ImageDraw.Draw(canvas)
+                        # Estimate font size
+                        text_len = len(content)
+                        area = rel_w * rel_h
+                        font_size = int(np.sqrt(area / (text_len or 1)) * 0.8)
+                        font_size = max(int(12 * scale), min(font_size, int(rel_h * 0.5)))
+                        
+                        try:
+                            # Try to use a common font
+                            font = ImageFont.load_default()
+                            # If we had a way to load Roboto or similar, it would be better
+                        except:
+                            font = ImageFont.load_default()
+                            
+                        # Simplified text centering for PIL
+                        # In a real app we'd use font.getbbox() but load_default() is limited
+                        # We'll just draw it in the middle for now
+                        note_draw.text((rel_x + rel_w/2, rel_y + rel_h/2), content, fill=(0,0,0,255), anchor="mm")
+
             elif item["type"] == "slot":
                 mask = Image.new("L", (rel_w, rel_h), 0)
                 mask_draw = ImageDraw.Draw(mask)
-                mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=12, fill=255)
+                mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=int(12 * scale), fill=255)
                 
-                slot_img = Image.new("RGBA", (rel_w, rel_h), (26, 26, 26, 255)) # Dark gray
+                slot_img = Image.new("RGBA", (rel_w, rel_h), (26, 26, 26, 255))
                 canvas.paste(slot_img, (rel_x, rel_y), mask)
+                
+                # Add label
+                slot_draw = ImageDraw.Draw(canvas)
+                slot_draw.text((rel_x + rel_w/2, rel_y + rel_h/2), item.get("label", "Slot"), fill=(255,255,255,255), anchor="mm")
 
         # Save result
         filename = f"flattened_{uuid.uuid4()}.png"
