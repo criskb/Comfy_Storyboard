@@ -57,8 +57,8 @@ class StoryboardStore:
             try:
                 from server import PromptServer
                 print(f"Storyboard: Notifying update for board '{board_id}'")
-                # Using a simpler event name without slashes
-                PromptServer.instance.send("storyboard_update", {"board_id": board_id})
+                # Using send_sync for better compatibility with ComfyUI's frontend API
+                PromptServer.instance.send_sync("storyboard_update", {"board_id": board_id})
             except Exception as e:
                 print(f"Storyboard: Failed to notify update: {e}")
                 pass

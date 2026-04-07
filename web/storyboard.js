@@ -11,11 +11,14 @@ document.head.appendChild(link);
 app.registerExtension({
     name: "Comfypencil.Storyboard",
     async setup() {
-        const callback = ({ detail }) => {
+        const callback = (event) => {
+            const detail = event.detail;
             console.log("Storyboard update event received:", detail);
-            if (StoryboardWorkspace.instance && StoryboardWorkspace.instance.boardId === detail.board_id) {
-                console.log("Reloading board:", detail.board_id);
-                StoryboardWorkspace.instance.loadBoard();
+            if (StoryboardWorkspace.instance) {
+                if (!detail || !detail.board_id || StoryboardWorkspace.instance.boardId === detail.board_id) {
+                    console.log("Reloading board:", detail?.board_id || "current");
+                    StoryboardWorkspace.instance.loadBoard();
+                }
             }
         };
         api.addEventListener("storyboard_update", callback);
@@ -288,7 +291,7 @@ class StoryboardWorkspace {
     }
 
     async loadBoard() {
-        const response = await fetch(`/mkr/storyboard/${this.boardId}`);
+        const response = await fetch(`/mkr/storyboard/${this.boardId}?t=${Date.now()}`);
         this.boardData = await response.json();
         console.log("Storyboard loaded:", this.boardData);
         if (!this.boardData.selection) this.boardData.selection = [];
@@ -484,7 +487,7 @@ class StoryboardWorkspace {
 
             if (item.type === "image") {
                 const img = document.createElement("img");
-                img.src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}`;
+                img.src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}?t=${Date.now()}`;
                 img.draggable = false; // Prevent browser ghost drag
                 el.appendChild(img);
             } else if (item.type === "slot") {
@@ -501,6 +504,17 @@ class StoryboardWorkspace {
                 const content = document.createElement("div");
                 content.className = "note-content";
                 content.innerText = item.content || "";
+                
+                // Dynamic font scaling
+                const textLength = (item.content || "").length;
+                const area = item.w * item.h;
+                // Base font size is 24px (1.5em)
+                // We want smaller text for more content and larger for less
+                // Scale factor roughly based on character count vs available area
+                let fontSize = Math.sqrt(area / (textLength || 1)) * 0.8;
+                fontSize = Math.max(12, Math.min(fontSize, item.h * 0.5));
+                content.style.fontSize = `${fontSize}px`;
+                
                 el.appendChild(content);
             } else if (item.type === "frame") {
                 el.classList.add("frame-item");
@@ -627,6 +641,29 @@ class StoryboardWorkspace {
             </div>
         `;
 
+        const presets = [
+            "#4CAF50", "#2196F3", "#f44336", "#ffeb3b",
+            "#9c27b0", "#ff9800", "#795548", "#607d8b"
+        ];
+
+        const createColorPicker = (currentColor) => {
+            let html = `
+                <div class="inspector-field">
+                    <label>Color</label>
+                    <input type="color" id="inspector-color" value="${currentColor}">
+                    <div class="color-presets">
+            `;
+            presets.forEach(p => {
+                const isActive = p.toLowerCase() === currentColor.toLowerCase();
+                html += `<div class="color-dot ${isActive ? 'active' : ''}" style="background-color: ${p}" data-color="${p}"></div>`;
+            });
+            html += `
+                    </div>
+                </div>
+            `;
+            return html;
+        };
+
         if (item.type === "image" || item.type === "slot") {
             fields += `
                 <div class="inspector-field">
@@ -644,10 +681,7 @@ class StoryboardWorkspace {
                     <label>Label</label>
                     <input type="text" id="inspector-label" value="${item.label || ""}">
                 </div>
-                <div class="inspector-field">
-                    <label>Color</label>
-                    <input type="color" id="inspector-color" value="${item.color || "#4CAF50"}">
-                </div>
+                ${createColorPicker(item.color || "#4CAF50")}
             `;
         } else if (item.type === "note") {
             fields += `
@@ -655,10 +689,7 @@ class StoryboardWorkspace {
                     <label>Content</label>
                     <textarea id="inspector-content-text" rows="5">${item.content || ""}</textarea>
                 </div>
-                <div class="inspector-field">
-                    <label>Color</label>
-                    <input type="color" id="inspector-color" value="${item.color || "#ffeb3b"}">
-                </div>
+                ${createColorPicker(item.color || "#ffeb3b")}
             `;
         }
 
@@ -732,24 +763,38 @@ class StoryboardWorkspace {
                 this.renderBoard();
                 this.saveBoard();
             };
-
-            document.getElementById("inspector-color").onchange = (e) => {
-                item.color = e.target.value;
-                this.renderBoard();
-                this.saveBoard();
-            };
         } else if (item.type === "note") {
             document.getElementById("inspector-content-text").onchange = (e) => {
                 item.content = e.target.value;
                 this.renderBoard();
                 this.saveBoard();
             };
+        }
 
-            document.getElementById("inspector-color").onchange = (e) => {
-                item.color = e.target.value;
+        // Color handling for both frame and note
+        if (item.type === "frame" || item.type === "note") {
+            const colorInput = document.getElementById("inspector-color");
+            const updateColor = (newColor) => {
+                item.color = newColor;
                 this.renderBoard();
                 this.saveBoard();
+                // Update dots active state
+                document.querySelectorAll(".color-dot").forEach(dot => {
+                    dot.classList.toggle("active", dot.dataset.color.toLowerCase() === newColor.toLowerCase());
+                });
             };
+
+            if (colorInput) {
+                colorInput.onchange = (e) => updateColor(e.target.value);
+            }
+
+            document.querySelectorAll(".color-dot").forEach(dot => {
+                dot.onclick = () => {
+                    const newColor = dot.dataset.color;
+                    if (colorInput) colorInput.value = newColor;
+                    updateColor(newColor);
+                };
+            });
         }
     }
 
@@ -888,64 +933,98 @@ class StoryboardWorkspace {
 
     showContextMenu(x, y) {
         this.contextMenu.style.display = "block";
-        this.contextMenu.style.left = `${x}px`;
-        this.contextMenu.style.top = `${y}px`;
         this.contextMenu.innerHTML = "";
 
-        const actions = [];
+        const createButton = (label, action, className = "") => {
+            const btn = document.createElement("button");
+            btn.innerText = label;
+            if (className) btn.className = className;
+            btn.onclick = () => {
+                action();
+                this.contextMenu.style.display = "none";
+            };
+            return btn;
+        };
+
+        const createSeparator = () => {
+            const sep = document.createElement("div");
+            sep.className = "menu-separator";
+            return sep;
+        };
+
+        const createHeader = (text) => {
+            const head = document.createElement("div");
+            head.className = "menu-header";
+            head.innerText = text;
+            return head;
+        };
+
         if (this.boardData.selection.length > 0) {
-            actions.push({ label: "Bring to Front", action: () => document.getElementById("action-front")?.click() });
-            actions.push({ label: "Send to Back", action: () => document.getElementById("action-back")?.click() });
+            this.contextMenu.appendChild(createButton("Bring to Front", () => document.getElementById("action-front")?.click()));
+            this.contextMenu.appendChild(createButton("Send to Back", () => document.getElementById("action-back")?.click()));
             
             if (this.boardData.selection.length === 1) {
                 const item = this.boardData.items.find(i => i.id === this.boardData.selection[0]);
                 if (item.type === "image" || item.type === "frame") {
+                    this.contextMenu.appendChild(createSeparator());
+                    this.contextMenu.appendChild(createHeader("Set as Reference"));
+                    
+                    const grid = document.createElement("div");
+                    grid.className = "ref-grid";
                     for (let i = 1; i <= 8; i++) {
-                        actions.push({ 
-                            label: `Set as Ref ${i}`, 
-                            action: () => {
-                                // Clear this ref from any other item first
-                                this.boardData.items.forEach(it => {
-                                    if (it.ref_id === i) delete it.ref_id;
-                                });
-                                item.ref_id = i;
-                                this.renderBoard();
-                                this.saveBoard();
-                            } 
-                        });
+                        const dot = document.createElement("div");
+                        dot.className = `ref-dot ${item.ref_id === i ? 'active' : ''}`;
+                        dot.innerText = i;
+                        dot.onclick = (e) => {
+                            e.stopPropagation();
+                            // Clear this ref from any other item first
+                            this.boardData.items.forEach(it => {
+                                if (it.ref_id === i) delete it.ref_id;
+                            });
+                            item.ref_id = i;
+                            this.renderBoard();
+                            this.saveBoard();
+                            this.contextMenu.style.display = "none";
+                        };
+                        grid.appendChild(dot);
                     }
+                    this.contextMenu.appendChild(grid);
+
                     if (item.ref_id) {
-                        actions.push({ 
-                            label: "Clear Reference", 
-                            action: () => {
-                                delete item.ref_id;
-                                this.renderBoard();
-                                this.saveBoard();
-                            } 
-                        });
+                        this.contextMenu.appendChild(createButton("Clear Reference", () => {
+                            delete item.ref_id;
+                            this.renderBoard();
+                            this.saveBoard();
+                        }));
                     }
                 }
             }
 
-            actions.push({ label: "Delete", action: () => {
+            this.contextMenu.appendChild(createSeparator());
+            this.contextMenu.appendChild(createButton("Delete", () => {
                 if (this.boardData.selection.length === 1) document.getElementById("action-delete")?.click();
                 else document.getElementById("action-delete-selected")?.click();
-            }});
+            }, "danger"));
         } else {
-            actions.push({ label: "Add Slot", action: () => document.getElementById("storyboard-add-slot")?.click() });
-            actions.push({ label: "Add Note", action: () => document.getElementById("storyboard-add-note")?.click() });
-            actions.push({ label: "Add Frame", action: () => document.getElementById("storyboard-add-frame")?.click() });
+            this.contextMenu.appendChild(createButton("Add Slot", () => document.getElementById("storyboard-add-slot")?.click()));
+            this.contextMenu.appendChild(createButton("Add Note", () => document.getElementById("storyboard-add-note")?.click()));
+            this.contextMenu.appendChild(createButton("Add Frame", () => document.getElementById("storyboard-add-frame")?.click()));
         }
 
-        actions.forEach(a => {
-            const btn = document.createElement("button");
-            btn.innerText = a.label;
-            btn.onclick = () => {
-                a.action();
-                this.contextMenu.style.display = "none";
-            };
-            this.contextMenu.appendChild(btn);
-        });
+        // Viewport constraint
+        const rect = this.contextMenu.getBoundingClientRect();
+        let left = x;
+        let top = y;
+
+        if (left + rect.width > window.innerWidth) {
+            left = x - rect.width;
+        }
+        if (top + rect.height > window.innerHeight) {
+            top = y - rect.height;
+        }
+
+        this.contextMenu.style.left = `${left}px`;
+        this.contextMenu.style.top = `${top}px`;
     }
 
     updateTransform() {
