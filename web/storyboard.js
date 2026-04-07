@@ -401,11 +401,16 @@ class StoryboardWorkspace {
         this.renderInspector();
     }
 
-    addItemInteractions(el, item) {
+    addItemInteractions(el, initialItem) {
+        const itemId = initialItem.id;
+        
         // Resize handle
         const resizeHandle = document.createElement("div");
         resizeHandle.className = "storyboard-resize-handle";
         resizeHandle.onmousedown = (e) => {
+            const item = this.boardData.items.find(i => i.id === itemId);
+            if (!item) return;
+            
             e.stopPropagation();
             e.preventDefault();
             this.isInteracting = true;
@@ -455,6 +460,9 @@ class StoryboardWorkspace {
         el.appendChild(resizeHandle);
         
         el.onmousedown = (e) => {
+            const item = this.boardData.items.find(i => i.id === itemId);
+            if (!item) return;
+
             if (e.button !== 0) return;
             e.stopPropagation();
             e.preventDefault();
@@ -462,21 +470,21 @@ class StoryboardWorkspace {
             
             // Selection logic
             if (e.shiftKey) {
-                if (this.boardData.selection.includes(item.id)) {
-                    this.boardData.selection = this.boardData.selection.filter(id => id !== item.id);
+                if (this.boardData.selection.includes(itemId)) {
+                    this.boardData.selection = this.boardData.selection.filter(id => id !== itemId);
                 } else {
-                    this.boardData.selection.push(item.id);
+                    this.boardData.selection.push(itemId);
                 }
             } else {
                 // Single select
-                this.boardData.selection = [item.id];
+                this.boardData.selection = [itemId];
             }
             this.renderBoard();
 
             const startX = e.clientX;
             const startY = e.clientY;
             
-            const itemsToMove = new Set(this.boardData.selection);
+            const itemsToMoveIds = new Set(this.boardData.selection);
             this.boardData.selection.forEach(id => {
                 const it = this.boardData.items.find(i => i.id === id);
                 if (it && it.type === "frame") {
@@ -485,17 +493,17 @@ class StoryboardWorkspace {
                             other.x >= it.x && other.y >= it.y &&
                             (other.x + other.w) <= (it.x + it.w) &&
                             (other.y + other.h) <= (it.y + it.h)) {
-                            itemsToMove.add(other.id);
+                            itemsToMoveIds.add(other.id);
                         }
                     });
                 }
             });
 
-            const selectedElements = Array.from(itemsToMove).map(id => {
+            const selectedElements = Array.from(itemsToMoveIds).map(id => {
                 const it = this.boardData.items.find(i => i.id === id);
                 const domEl = this.itemElements.get(id);
                 return { item: it, domEl, startX: it.x, startY: it.y };
-            }).filter(entry => entry.domEl);
+            }).filter(entry => entry.domEl && entry.item);
 
             const onMouseMove = (moveEvent) => {
                 const dx = (moveEvent.clientX - startX) / this.scale;
