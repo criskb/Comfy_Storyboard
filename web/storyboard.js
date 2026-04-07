@@ -11,13 +11,14 @@ document.head.appendChild(link);
 app.registerExtension({
     name: "Comfypencil.Storyboard",
     async setup() {
-        api.addEventListener("storyboard/update", ({ detail }) => {
+        const callback = ({ detail }) => {
             console.log("Storyboard update event received:", detail);
             if (StoryboardWorkspace.instance && StoryboardWorkspace.instance.boardId === detail.board_id) {
                 console.log("Reloading board:", detail.board_id);
                 StoryboardWorkspace.instance.loadBoard();
             }
-        });
+        };
+        api.addEventListener("storyboard_update", callback);
     },
     async nodeCreated(node) {
         if (node.comfyClass === "Storyboard") {
