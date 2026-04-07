@@ -44,6 +44,15 @@ class StoryboardAPI:
             store.save_board(data, notify=notify)
             return web.json_response({"status": "ok"})
 
+        @server.routes.post("/mkr/storyboard/{board_id}/flatten/{frame_id}")
+        async def flatten_frame(request):
+            board_id = request.match_info["board_id"]
+            frame_id = request.match_info["frame_id"]
+            filename = store.flatten_frame(board_id, frame_id)
+            if filename:
+                return web.json_response({"status": "ok", "filename": filename})
+            return web.json_response({"status": "error"}, status=400)
+
         @server.routes.post("/mkr/storyboard/{board_id}/fill")
         async def fill_placeholder(request):
             board_id = request.match_info["board_id"]

@@ -102,6 +102,85 @@ class StoryboardStore:
             return True
         return False
 
+    def flatten_frame(self, board_id, frame_id):
+        board_data = self.get_board(board_id)
+        frame = next((i for i in board_data["items"] if i["id"] == frame_id), None)
+        if not frame or frame["type"] != "frame":
+            return None
+
+        # Find items inside the frame
+        contained_items = []
+        for item in board_data["items"]:
+            if item["id"] == frame_id: continue
+            if (item["x"] >= frame["x"] and item["y"] >= frame["y"] and
+                (item["x"] + item["w"]) <= (frame["x"] + frame["w"]) and
+                (item["y"] + item["h"]) <= (frame["y"] + frame["h"])):
+                contained_items.append(item)
+
+        # Create base image
+        from PIL import Image, ImageDraw
+        canvas = Image.new("RGBA", (int(frame["w"]), int(frame["h"])), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(canvas)
+
+        # Draw frame background
+        bg_color = frame.get("color", "#4CAF50")
+        if bg_color.startswith("#"):
+            # Hex to RGB
+            hex_color = bg_color.lstrip('#')
+            rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            draw.rectangle([0, 0, frame["w"], frame["h"]], fill=(*rgb, 26)) # 10% opacity
+            draw.rectangle([0, 0, frame["w"], frame["h"]], outline=(*rgb, 255), width=3)
+
+        # Draw items in order they appear in board data
+        assets_path = self._get_assets_path(board_id)
+        for item in contained_items:
+            rel_x = int(item["x"] - frame["x"])
+            rel_y = int(item["y"] - frame["y"])
+            rel_w = int(item["w"])
+            rel_h = int(item["h"])
+
+            if item["type"] == "image" and item.get("image_ref"):
+                img_path = os.path.join(assets_path, item["image_ref"])
+                if os.path.exists(img_path):
+                    try:
+                        img = Image.open(img_path).convert("RGBA")
+                        img = img.resize((rel_w, rel_h), Image.Resampling.LANCZOS)
+                        
+                        # Apply rounded corners to the item image
+                        mask = Image.new("L", (rel_w, rel_h), 0)
+                        mask_draw = ImageDraw.Draw(mask)
+                        mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=12, fill=255)
+                        
+                        temp_canvas = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+                        temp_canvas.paste(img, (0, 0), mask)
+                        canvas.alpha_composite(temp_canvas, (rel_x, rel_y))
+                    except Exception as e:
+                        print(f"Error drawing image in flatten: {e}")
+            elif item["type"] == "note":
+                color = item.get("color", "#ffeb3b")
+                if color.startswith("#"):
+                    hex_c = color.lstrip('#')
+                    rgb = tuple(int(hex_c[i:i+2], 16) for i in (0, 2, 4))
+                    
+                    mask = Image.new("L", (rel_w, rel_h), 0)
+                    mask_draw = ImageDraw.Draw(mask)
+                    mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=12, fill=255)
+                    
+                    note_img = Image.new("RGBA", (rel_w, rel_h), (*rgb, 255))
+                    canvas.paste(note_img, (rel_x, rel_y), mask)
+            elif item["type"] == "slot":
+                mask = Image.new("L", (rel_w, rel_h), 0)
+                mask_draw = ImageDraw.Draw(mask)
+                mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=12, fill=255)
+                
+                slot_img = Image.new("RGBA", (rel_w, rel_h), (26, 26, 26, 255)) # Dark gray
+                canvas.paste(slot_img, (rel_x, rel_y), mask)
+
+        # Save result
+        filename = f"flattened_{uuid.uuid4()}.png"
+        canvas.save(os.path.join(assets_path, filename))
+        return filename
+
     def rename_board(self, old_id, new_id):
         old_path = self._get_board_path(old_id)
         new_path = self._get_board_path(new_id)

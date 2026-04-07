@@ -763,12 +763,34 @@ class StoryboardWorkspace {
 
         content.innerHTML = fields + `
             <div class="inspector-actions">
+                ${item.type === 'frame' ? '<button id="action-flatten">Flatten to Image</button>' : ''}
                 <button id="action-copy">Copy to Clipboard</button>
                 <button id="action-front">Bring to Front</button>
                 <button id="action-back">Send to Back</button>
                 <button id="action-delete" class="danger">Delete Item</button>
             </div>
         `;
+
+        if (item.type === 'frame') {
+            document.getElementById("action-flatten").onclick = async () => {
+                const response = await fetch(`/mkr/storyboard/${this.boardId}/flatten/${item.id}`, { method: "POST" });
+                const result = await response.json();
+                if (result.status === "ok") {
+                    this.boardData.items.push({
+                        id: this.generateUUID(),
+                        type: "image",
+                        x: item.x + item.w + 20,
+                        y: item.y,
+                        w: item.w,
+                        h: item.h,
+                        image_ref: result.filename,
+                        label: `Flattened ${item.label || "Frame"}`
+                    });
+                    this.renderBoard();
+                    this.saveBoard();
+                }
+            };
+        }
 
         document.getElementById("action-copy").onclick = async () => {
             if (item.type === "image") {
@@ -1037,6 +1059,11 @@ class StoryboardWorkspace {
             if (this.boardData.selection.length === 1) {
                 const item = this.boardData.items.find(i => i.id === this.boardData.selection[0]);
                 if (item.type === "image" || item.type === "frame") {
+                    if (item.type === "frame") {
+                        this.contextMenu.appendChild(createSeparator());
+                        this.contextMenu.appendChild(createButton("Flatten to Image", () => document.getElementById("action-flatten")?.click()));
+                    }
+                    
                     this.contextMenu.appendChild(createSeparator());
                     this.contextMenu.appendChild(createHeader("Set as Reference"));
                     
