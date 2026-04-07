@@ -15,19 +15,21 @@ class Storyboard:
                 "target_id": ("STRING", {"default": ""}),
                 "board_id": ("STRING", {"default": "default"}),
                 "version": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "prompt": ("STRING", {"multiline": True, "default": ""}),
             },
             "optional": {
                 "images": ("IMAGE",),
                 "manifest_in": ("STORYBOARD_MANIFEST",),
+                "clip": ("CLIP",),
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "MASK", "JSON", "STORYBOARD_MANIFEST", "IMAGE")
-    RETURN_NAMES = ("selected_image", "selected_batch", "selected_mask", "selected_meta", "board_manifest", "board_preview")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "MASK", "JSON", "STORYBOARD_MANIFEST", "IMAGE", "CONDITIONING")
+    RETURN_NAMES = ("selected_image", "selected_batch", "selected_mask", "selected_meta", "board_manifest", "board_preview", "conditioning")
     FUNCTION = "process"
     CATEGORY = "Storyboard"
 
-    def process(self, action="none", target_id="", board_id="default", version=0, images=None, manifest_in=None):
+    def process(self, action="none", target_id="", board_id="default", version=0, prompt="", images=None, manifest_in=None, clip=None):
         board_data = store.get_board(board_id)
         
         if action == "clear":
@@ -35,13 +37,20 @@ class Storyboard:
             board_data["selection"] = []
             store.save_board(board_data)
         
+        # Prompt conditioning
+        conditioning = None
+        if clip is not None and prompt:
+            tokens = clip.tokenize(prompt)
+            cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
+            conditioning = [[cond, {"pooled_output": pooled}]]
+        
         # Return currently selected images and manifest
         # (This is a simplified implementation for v1)
         dummy_image = torch.zeros((1, 64, 64, 3))
         dummy_mask = torch.zeros((1, 64, 64))
         dummy_json = {}
         
-        return (dummy_image, dummy_image, dummy_mask, dummy_json, board_data, dummy_image)
+        return (dummy_image, dummy_image, dummy_mask, dummy_json, board_data, dummy_image, conditioning)
 
 class StoryboardSend:
     @classmethod

@@ -94,8 +94,16 @@ class StoryboardWorkspace {
         main.appendChild(this.canvasContainer);
         main.appendChild(this.inspector);
         
+        const footer = document.createElement("div");
+        footer.className = "storyboard-footer";
+        footer.innerHTML = `
+            <textarea id="storyboard-prompt" placeholder="Enter prompt..."></textarea>
+            <button id="storyboard-queue">Queue Prompt</button>
+        `;
+
         this.window.appendChild(header);
         this.window.appendChild(main);
+        this.window.appendChild(footer);
         
         this.contextMenu = document.createElement("div");
         this.contextMenu.className = "storyboard-context-menu";
@@ -185,6 +193,20 @@ class StoryboardWorkspace {
             this.saveBoard();
         };
 
+        const promptEl = document.getElementById("storyboard-prompt");
+        promptEl.oninput = () => {
+            if (this.node) {
+                const promptWidget = this.node.widgets.find(w => w.name === "prompt");
+                if (promptWidget) {
+                    promptWidget.value = promptEl.value;
+                }
+            }
+        };
+
+        document.getElementById("storyboard-queue").onclick = () => {
+            app.queuePrompt(0);
+        };
+
         document.getElementById("storyboard-clear").onclick = async () => {
             if (confirm("Are you sure you want to clear the entire board?")) {
                 this.boardData.items = [];
@@ -247,6 +269,15 @@ class StoryboardWorkspace {
         this.boardData = await response.json();
         if (!this.boardData.selection) this.boardData.selection = [];
         this.renderBoard();
+
+        // Sync prompt if node exists
+        if (this.node) {
+            const promptWidget = this.node.widgets.find(w => w.name === "prompt");
+            const promptEl = document.getElementById("storyboard-prompt");
+            if (promptWidget && promptEl) {
+                promptEl.value = promptWidget.value || "";
+            }
+        }
     }
 
     async saveBoard(notify = false) {
@@ -293,8 +324,22 @@ class StoryboardWorkspace {
                 const onMouseMove = (moveEvent) => {
                     const dw = (moveEvent.clientX - startX) / this.scale;
                     const dh = (moveEvent.clientY - startY) / this.scale;
-                    item.w = Math.max(50, startW + dw);
-                    item.h = Math.max(50, startH + dh);
+                    
+                    if (moveEvent.shiftKey) {
+                        // Uniform scaling
+                        const ratio = startW / startH;
+                        if (Math.abs(dw) > Math.abs(dh)) {
+                            item.w = Math.max(50, startW + dw);
+                            item.h = item.w / ratio;
+                        } else {
+                            item.h = Math.max(50, startH + dh);
+                            item.w = item.h * ratio;
+                        }
+                    } else {
+                        item.w = Math.max(50, startW + dw);
+                        item.h = Math.max(50, startH + dh);
+                    }
+                    
                     el.style.width = `${item.w}px`;
                     el.style.height = `${item.h}px`;
                 };
