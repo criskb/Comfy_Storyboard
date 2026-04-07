@@ -345,190 +345,232 @@ class StoryboardWorkspace {
     }
 
     renderBoard() {
-        this.canvas.innerHTML = "";
-        // Sort items so frames are always in the back
-        const sortedItems = [...this.boardData.items].sort((a, b) => {
-            if (a.type === "frame" && b.type !== "frame") return -1;
-            if (a.type !== "frame" && b.type === "frame") return 1;
-            return 0;
-        });
-
-        sortedItems.forEach(item => {
-            const el = document.createElement("div");
-            el._itemId = item.id;
-            el.className = "storyboard-item";
-            if (this.boardData.selection.includes(item.id)) {
-                el.classList.add("selected");
+        // Track which items are current to remove old ones later
+        const currentItemIds = new Set(this.boardData.items.map(i => i.id));
+        
+        // Remove DOM elements for items that no longer exist
+        for (const [id, el] of this.itemElements.entries()) {
+            if (!currentItemIds.has(id)) {
+                el.remove();
+                this.itemElements.delete(id);
             }
+        }
+
+        this.boardData.items.forEach(item => {
+            let el = this.itemElements.get(item.id);
+            let isNew = false;
+            
+            if (!el) {
+                el = document.createElement("div");
+                el._itemId = item.id;
+                el.className = "storyboard-item";
+                this.itemElements.set(item.id, el);
+                this.canvas.appendChild(el);
+                isNew = true;
+                
+                // Add interaction handlers once
+                this.addItemInteractions(el, item);
+            }
+
+            // Update state
+            el.classList.toggle("selected", this.boardData.selection.includes(item.id));
+            
+            // Set styles
             el.style.left = `${item.x}px`;
             el.style.top = `${item.y}px`;
             el.style.width = `${item.w}px`;
             el.style.height = `${item.h}px`;
+            el.style.zIndex = item.type === "frame" ? "1" : "10";
             
-            // Reference Pill
-            if (item.ref_id) {
-                const pill = document.createElement("div");
+            // Update item-type specific content
+            this.updateItemContent(el, item, isNew);
+        });
+
+        this.renderInspector();
+    }
+
+    addItemInteractions(el, item) {
+        // Resize handle
+        const resizeHandle = document.createElement("div");
+        resizeHandle.className = "storyboard-resize-handle";
+        resizeHandle.onmousedown = (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startW = item.w;
+            const startH = item.h;
+
+            const onMouseMove = (moveEvent) => {
+                const dw = (moveEvent.clientX - startX) / this.scale;
+                const dh = (moveEvent.clientY - startY) / this.scale;
+                
+                if (moveEvent.shiftKey) {
+                    const ratio = startW / startH;
+                    if (Math.abs(dw) > Math.abs(dh)) {
+                        item.w = Math.max(50, startW + dw);
+                        item.h = item.w / ratio;
+                    } else {
+                        item.h = Math.max(50, startH + dh);
+                        item.w = item.h * ratio;
+                    }
+                } else {
+                    item.w = Math.max(50, startW + dw);
+                    item.h = Math.max(50, startH + dh);
+                }
+                
+                el.style.width = `${item.w}px`;
+                el.style.height = `${item.h}px`;
+                
+                // If it's a note, we might want to update font size live
+                if (item.type === "note") {
+                    this.updateItemContent(el, item, false);
+                }
+            };
+
+            const onMouseUp = () => {
+                window.removeEventListener("mousemove", onMouseMove);
+                window.removeEventListener("mouseup", onMouseUp);
+                this.saveBoard();
+                this.renderBoard();
+            };
+
+            window.addEventListener("mousemove", onMouseMove);
+            window.addEventListener("mouseup", onMouseUp);
+        };
+        el.appendChild(resizeHandle);
+        
+        el.onmousedown = (e) => {
+            if (e.button !== 0) return;
+            e.stopPropagation();
+            e.preventDefault();
+            
+            if (!e.shiftKey && !this.boardData.selection.includes(item.id)) {
+                this.boardData.selection = [item.id];
+            } else if (e.shiftKey) {
+                if (this.boardData.selection.includes(item.id)) {
+                    this.boardData.selection = this.boardData.selection.filter(id => id !== item.id);
+                } else {
+                    this.boardData.selection.push(item.id);
+                }
+            }
+            this.renderBoard();
+
+            const startX = e.clientX;
+            const startY = e.clientY;
+            
+            const itemsToMove = new Set(this.boardData.selection);
+            this.boardData.selection.forEach(id => {
+                const it = this.boardData.items.find(i => i.id === id);
+                if (it && it.type === "frame") {
+                    this.boardData.items.forEach(other => {
+                        if (other.id !== it.id &&
+                            other.x >= it.x && other.y >= it.y &&
+                            (other.x + other.w) <= (it.x + it.w) &&
+                            (other.y + other.h) <= (it.y + it.h)) {
+                            itemsToMove.add(other.id);
+                        }
+                    });
+                }
+            });
+
+            const selectedElements = Array.from(itemsToMove).map(id => {
+                const it = this.boardData.items.find(i => i.id === id);
+                const domEl = this.itemElements.get(id);
+                return { item: it, domEl, startX: it.x, startY: it.y };
+            }).filter(entry => entry.domEl);
+
+            const onMouseMove = (moveEvent) => {
+                const dx = (moveEvent.clientX - startX) / this.scale;
+                const dy = (moveEvent.clientY - startY) / this.scale;
+
+                selectedElements.forEach(entry => {
+                    entry.item.x = entry.startX + dx;
+                    entry.item.y = entry.startY + dy;
+                    entry.domEl.style.left = `${entry.item.x}px`;
+                    entry.domEl.style.top = `${entry.item.y}px`;
+                });
+            };
+
+            const onMouseUp = () => {
+                window.removeEventListener("mousemove", onMouseMove);
+                window.removeEventListener("mouseup", onMouseUp);
+                this.saveBoard();
+                this.renderBoard();
+            };
+
+            window.addEventListener("mousemove", onMouseMove);
+            window.addEventListener("mouseup", onMouseUp);
+        };
+    }
+
+    updateItemContent(el, item, isNew) {
+        // Reference Pill
+        let pill = el.querySelector(".storyboard-ref-pill");
+        if (item.ref_id) {
+            if (!pill) {
+                pill = document.createElement("div");
                 pill.className = "storyboard-ref-pill";
-                pill.innerText = `REF ${item.ref_id}`;
                 el.appendChild(pill);
             }
+            pill.innerText = `REF ${item.ref_id}`;
+        } else if (pill) {
+            pill.remove();
+        }
 
-            // Resize handle
-            const resizeHandle = document.createElement("div");
-            resizeHandle.className = "storyboard-resize-handle";
-            resizeHandle.onmousedown = (e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                const startX = e.clientX;
-                const startY = e.clientY;
-                const startW = item.w;
-                const startH = item.h;
-
-                const onMouseMove = (moveEvent) => {
-                    const dw = (moveEvent.clientX - startX) / this.scale;
-                    const dh = (moveEvent.clientY - startY) / this.scale;
-                    
-                    if (moveEvent.shiftKey) {
-                        // Uniform scaling
-                        const ratio = startW / startH;
-                        if (Math.abs(dw) > Math.abs(dh)) {
-                            item.w = Math.max(50, startW + dw);
-                            item.h = item.w / ratio;
-                        } else {
-                            item.h = Math.max(50, startH + dh);
-                            item.w = item.h * ratio;
-                        }
-                    } else {
-                        item.w = Math.max(50, startW + dw);
-                        item.h = Math.max(50, startH + dh);
-                    }
-                    
-                    el.style.width = `${item.w}px`;
-                    el.style.height = `${item.h}px`;
-                };
-
-                const onMouseUp = () => {
-                    window.removeEventListener("mousemove", onMouseMove);
-                    window.removeEventListener("mouseup", onMouseUp);
-                    this.saveBoard();
-                    this.renderBoard(); // Final sync and update inspector
-                };
-
-                window.addEventListener("mousemove", onMouseMove);
-                window.addEventListener("mouseup", onMouseUp);
-            };
-            el.appendChild(resizeHandle);
-            
-            el.onmousedown = (e) => {
-                if (e.button !== 0) return;
-                e.stopPropagation();
-                e.preventDefault(); // Prevent browser default drag behavior
-                
-                // Selection logic
-                if (!e.shiftKey && !this.boardData.selection.includes(item.id)) {
-                    this.boardData.selection = [item.id];
-                } else if (e.shiftKey) {
-                    if (this.boardData.selection.includes(item.id)) {
-                        this.boardData.selection = this.boardData.selection.filter(id => id !== item.id);
-                    } else {
-                        this.boardData.selection.push(item.id);
-                    }
-                }
-                this.renderBoard();
-
-                // Dragging logic
-                const startX = e.clientX;
-                const startY = e.clientY;
-                
-                // Find all items to move (selection + items inside selected frames)
-                const itemsToMove = new Set(this.boardData.selection);
-                this.boardData.selection.forEach(id => {
-                    const item = this.boardData.items.find(i => i.id === id);
-                    if (item && item.type === "frame") {
-                        // Find items inside this frame
-                        this.boardData.items.forEach(other => {
-                            if (other.id !== item.id &&
-                                other.x >= item.x && other.y >= item.y &&
-                                (other.x + other.w) <= (item.x + item.w) &&
-                                (other.y + other.h) <= (item.y + item.h)) {
-                                itemsToMove.add(other.id);
-                            }
-                        });
-                    }
-                });
-
-                const selectedElements = Array.from(itemsToMove).map(id => {
-                    const it = this.boardData.items.find(i => i.id === id);
-                    const domEl = Array.from(this.canvas.children).find(child => child._itemId === id);
-                    return { item: it, domEl, startX: it.x, startY: it.y };
-                }).filter(entry => entry.domEl);
-
-                const onMouseMove = (moveEvent) => {
-                    const dx = (moveEvent.clientX - startX) / this.scale;
-                    const dy = (moveEvent.clientY - startY) / this.scale;
-
-                    selectedElements.forEach(entry => {
-                        entry.item.x = entry.startX + dx;
-                        entry.item.y = entry.startY + dy;
-                        entry.domEl.style.left = `${entry.item.x}px`;
-                        entry.domEl.style.top = `${entry.item.y}px`;
-                    });
-                };
-
-                const onMouseUp = () => {
-                    window.removeEventListener("mousemove", onMouseMove);
-                    window.removeEventListener("mouseup", onMouseUp);
-                    this.saveBoard();
-                    this.renderBoard(); // Final sync and update inspector
-                };
-
-                window.addEventListener("mousemove", onMouseMove);
-                window.addEventListener("mouseup", onMouseUp);
-            };
-
-            if (item.type === "image") {
-                const img = document.createElement("img");
-                img.src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}?t=${Date.now()}`;
-                img.draggable = false; // Prevent browser ghost drag
+        if (item.type === "image") {
+            let img = el.querySelector("img");
+            if (!img) {
+                img = document.createElement("img");
+                img.draggable = false;
                 el.appendChild(img);
-            } else if (item.type === "slot") {
-                el.classList.add("slot-item");
-                const label = document.createElement("div");
+            }
+            const src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}?t=${Date.now()}`;
+            if (img.src !== src) img.src = src;
+            
+        } else if (item.type === "slot") {
+            el.classList.add("slot-item");
+            let label = el.querySelector(".slot-label");
+            if (!label) {
+                label = document.createElement("div");
                 label.className = "slot-label";
-                label.innerText = item.label || "Empty Slot";
-                el.appendChild(label);
-            } else if (item.type === "note") {
-                el.classList.add("note-item");
-                const bgColor = item.color || "#ffeb3b";
-                el.style.backgroundColor = bgColor;
-                el.style.color = this.getContrastColor(bgColor);
-                const content = document.createElement("div");
-                content.className = "note-content";
-                content.innerText = item.content || "";
-                
-                // Dynamic font scaling
-                const textLength = (item.content || "").length;
-                const area = item.w * item.h;
-                // Base font size is 24px (1.5em)
-                // We want smaller text for more content and larger for less
-                // Scale factor roughly based on character count vs available area
-                let fontSize = Math.sqrt(area / (textLength || 1)) * 0.8;
-                fontSize = Math.max(12, Math.min(fontSize, item.h * 0.5));
-                content.style.fontSize = `${fontSize}px`;
-                
-                el.appendChild(content);
-            } else if (item.type === "frame") {
-                el.classList.add("frame-item");
-                el.style.borderColor = item.color || "#4CAF50";
-                const label = document.createElement("div");
-                label.className = "frame-label";
-                label.innerText = item.label || "";
-                label.style.backgroundColor = item.color || "#4CAF50";
                 el.appendChild(label);
             }
+            label.innerText = item.label || "Empty Slot";
             
-            this.canvas.appendChild(el);
-        });
+        } else if (item.type === "note") {
+            el.classList.add("note-item");
+            const bgColor = item.color || "#ffeb3b";
+            el.style.backgroundColor = bgColor;
+            el.style.color = this.getContrastColor(bgColor);
+            
+            let content = el.querySelector(".note-content");
+            if (!content) {
+                content = document.createElement("div");
+                content.className = "note-content";
+                el.appendChild(content);
+            }
+            content.innerText = item.content || "";
+            
+            const textLength = (item.content || "").length;
+            const area = item.w * item.h;
+            let fontSize = Math.sqrt(area / (textLength || 1)) * 0.8;
+            fontSize = Math.max(12, Math.min(fontSize, item.h * 0.5));
+            content.style.fontSize = `${fontSize}px`;
+            
+        } else if (item.type === "frame") {
+            el.classList.add("frame-item");
+            el.style.borderColor = item.color || "#4CAF50";
+            let label = el.querySelector(".frame-label");
+            if (!label) {
+                label = document.createElement("div");
+                label.className = "frame-label";
+                el.appendChild(label);
+            }
+            label.innerText = item.label || "";
+            label.style.backgroundColor = item.color || "#4CAF50";
+        }
+    }
         this.renderInspector();
     }
 
