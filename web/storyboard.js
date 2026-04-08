@@ -449,14 +449,21 @@ class StoryboardWorkspace {
                 const item = this.boardData.items.find(i => i.id === itemId);
                 if (!item) return;
                 
+                const wasCropping = el.classList.contains("cropping");
                 el.classList.toggle("cropping");
                 cropGlyph.classList.toggle("active");
                 
-                if (el.classList.contains("cropping")) {
+                if (!wasCropping) {
+                    // Entering cropping mode
                     this.isInteracting = true;
                     this.renderCropUI(el, item);
                 } else {
+                    // Exiting cropping mode
                     this.isInteracting = false;
+                    // Remove the crop overlay
+                    const overlay = el.querySelector(".storyboard-crop-overlay");
+                    if (overlay) overlay.remove();
+                    
                     this.saveBoard();
                     this.renderBoard();
                 }
@@ -483,7 +490,8 @@ class StoryboardWorkspace {
                 const dw = (moveEvent.clientX - startX) / this.scale;
                 const dh = (moveEvent.clientY - startY) / this.scale;
                 
-                if (moveEvent.shiftKey) {
+                // Force uniform scaling for images and slots
+                if (item.type === "image" || item.type === "slot" || moveEvent.shiftKey) {
                     const ratio = startW / startH;
                     if (Math.abs(dw) > Math.abs(dh)) {
                         item.w = Math.max(50, startW + dw);
@@ -645,13 +653,15 @@ class StoryboardWorkspace {
             // Preview the crop in real-time
             const img = el.querySelector("img");
             if (img) {
+                // Calculate scale to show the crop area
                 const scaleX = 1 / Math.max(0.01, crop.w);
                 const scaleY = 1 / Math.max(0.01, crop.h);
+                
                 img.style.width = `${scaleX * 100}%`;
                 img.style.height = `${scaleY * 100}%`;
                 img.style.left = `${-crop.x * scaleX * 100}%`;
                 img.style.top = `${-crop.y * scaleY * 100}%`;
-                img.style.objectFit = "cover"; // NO STRETCHING
+                img.style.objectFit = "cover"; 
             }
         };
 
@@ -871,6 +881,9 @@ class StoryboardWorkspace {
             if (item.crop) {
                 const { x, y, w, h } = item.crop;
                 
+                // We use percentage-based scaling to show the cropped area.
+                // scaleX = 1/w, scaleY = 1/h.
+                // To keep it centered and non-stretched, we use object-fit: cover on the image.
                 const scaleX = 1 / Math.max(0.01, w);
                 const scaleY = 1 / Math.max(0.01, h);
                 
@@ -878,7 +891,7 @@ class StoryboardWorkspace {
                 img.style.height = `${scaleY * 100}%`;
                 img.style.left = `${-x * scaleX * 100}%`;
                 img.style.top = `${-y * scaleY * 100}%`;
-                img.style.objectFit = "cover"; // Maintain aspect ratio, NO STRETCHING
+                img.style.objectFit = "cover"; 
             } else {
                 img.style.width = "100%";
                 img.style.height = "100%";
@@ -992,6 +1005,49 @@ class StoryboardWorkspace {
         }
     }
 
+    async copyToClipboard(text) {
+        console.log("Copying to clipboard:", text);
+        
+        // Method 1: Modern Async Clipboard API
+        if (navigator.clipboard && window.isSecureContext) {
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch (err) {
+                console.warn("Async clipboard failed, trying fallback:", err);
+            }
+        }
+
+        // Method 2: Legacy execCommand('copy')
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        textArea.style.top = "0";
+        textArea.style.opacity = "0";
+        document.body.appendChild(textArea);
+        
+        // Save current focus
+        const activeEl = document.activeElement;
+        
+        textArea.focus();
+        textArea.select();
+        
+        let success = false;
+        try {
+            success = document.execCommand('copy');
+        } catch (err) {
+            console.error("Legacy copy failed:", err);
+        }
+        
+        document.body.removeChild(textArea);
+        
+        // Restore focus
+        if (activeEl) activeEl.focus();
+        
+        return success;
+    }
+
     renderPaletteColors(bar, colors) {
         bar.innerHTML = "";
         colors.forEach(c => {
@@ -1005,45 +1061,12 @@ class StoryboardWorkspace {
             dot.appendChild(span);
             
             dot.title = `Click to copy: ${c}`;
-            dot.onclick = (e) => {
+            dot.onclick = async (e) => {
                 e.stopPropagation();
-                
                 const text = c.toUpperCase();
-                console.log("Attempting to copy color:", text);
-                
-                // Final robust copy method:
-                // 1. Try modern clipboard API
-                // 2. Fallback to hidden textarea with explicit focus
-                // 3. Fallback to prompt if all else fails (absolute last resort for debug)
-                
-                const doCopy = (val) => {
-                    const textArea = document.createElement("textarea");
-                    textArea.value = val;
-                    textArea.style.position = "fixed";
-                    textArea.style.left = "-9999px";
-                    textArea.style.top = "0";
-                    textArea.style.opacity = "0";
-                    document.body.appendChild(textArea);
-                    textArea.focus();
-                    textArea.select();
-                    try {
-                        const successful = document.execCommand('copy');
-                        document.body.removeChild(textArea);
-                        return successful;
-                    } catch (err) {
-                        document.body.removeChild(textArea);
-                        return false;
-                    }
-                };
-
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(text).then(() => {
-                        this.showCopyFeedback(dot);
-                    }).catch(() => {
-                        if (doCopy(text)) this.showCopyFeedback(dot);
-                    });
-                } else {
-                    if (doCopy(text)) this.showCopyFeedback(dot);
+                const success = await this.copyToClipboard(text);
+                if (success) {
+                    this.showCopyFeedback(dot);
                 }
             };
             bar.appendChild(dot);
@@ -1054,25 +1077,6 @@ class StoryboardWorkspace {
         const originalTransform = el.style.transform;
         el.style.transform = "scale(1.2)";
         setTimeout(() => el.style.transform = originalTransform, 200);
-    }
-
-    fallbackCopyText(text) {
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-9999px";
-        textArea.style.top = "0";
-        textArea.style.opacity = "0";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-            document.execCommand('copy');
-            console.log("Fallback copy successful");
-        } catch (err) {
-            console.error('Fallback copy failed', err);
-        }
-        document.body.removeChild(textArea);
     }
 
     renderInspector() {
