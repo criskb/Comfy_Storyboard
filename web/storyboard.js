@@ -56,6 +56,7 @@ class StoryboardWorkspace {
         this.paletteCache = new Map(); // frameId -> colors[]
         this.paletteLoading = new Set(); // frameIds currently fetching
         this.internalClipboard = [];
+        this.needsReload = false;
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
@@ -323,7 +324,11 @@ class StoryboardWorkspace {
     }
 
     async loadBoard() {
-        if (this.isInteracting) return;
+        if (this.isInteracting) {
+            this.needsReload = true;
+            return;
+        }
+        this.needsReload = false;
         const response = await fetch(`/mkr/storyboard/${this.boardId}?t=${Date.now()}`);
         this.boardData = await response.json();
         console.log("Storyboard loaded:", this.boardData);
@@ -499,8 +504,13 @@ class StoryboardWorkspace {
                 this.isInteracting = false;
                 window.removeEventListener("mousemove", onMouseMove);
                 window.removeEventListener("mouseup", onMouseUp);
-                this.saveBoard();
-                this.renderBoard();
+                
+                if (this.needsReload) {
+                    this.loadBoard();
+                } else {
+                    this.saveBoard();
+                    this.renderBoard();
+                }
             };
 
             window.addEventListener("mousemove", onMouseMove);
@@ -570,8 +580,13 @@ class StoryboardWorkspace {
                 this.isInteracting = false;
                 window.removeEventListener("mousemove", onMouseMove);
                 window.removeEventListener("mouseup", onMouseUp);
-                this.saveBoard();
-                this.renderBoard();
+                
+                if (this.needsReload) {
+                    this.loadBoard();
+                } else {
+                    this.saveBoard();
+                    this.renderBoard();
+                }
             };
 
             window.addEventListener("mousemove", onMouseMove);
@@ -894,9 +909,9 @@ class StoryboardWorkspace {
         // Check if we need to fetch new palette
         const imagesInFrame = this.boardData.items
             .filter(it => it.type === "image" && it.image_ref &&
-                it.x >= item.x && it.y >= item.y &&
-                (it.x + it.w) <= (item.x + item.w) &&
-                (it.y + it.h) <= (item.y + item.h));
+                (it.x + it.w / 2) >= item.x && (it.y + it.h / 2) >= item.y &&
+                (it.x + it.w / 2) <= (item.x + item.w) &&
+                (it.y + it.h / 2) <= (item.y + item.h));
         
         const containedImageIds = imagesInFrame
             .map(it => `${it.id}_${it.image_ref}_${JSON.stringify(it.crop || {})}`)
@@ -943,12 +958,13 @@ class StoryboardWorkspace {
             const dot = document.createElement("div");
             dot.className = "palette-color";
             dot.style.backgroundColor = c;
+            dot.style.color = this.getContrastColor(c);
+            dot.innerText = c.toUpperCase();
             dot.title = `Click to copy: ${c}`;
             dot.onclick = (e) => {
                 e.stopPropagation();
                 navigator.clipboard.writeText(c);
                 // Visual feedback
-                const originalBg = dot.style.backgroundColor;
                 dot.style.boxShadow = "0 0 15px white";
                 setTimeout(() => dot.style.boxShadow = "", 200);
             };

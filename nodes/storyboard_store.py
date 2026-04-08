@@ -108,13 +108,18 @@ class StoryboardStore:
         if not frame or frame["type"] != "frame":
             return None
 
-        # Find items inside the frame
+        # Find items inside the frame (center point must be inside)
         contained_items = []
         for item in board_data["items"]:
             if item["id"] == frame_id: continue
-            if (item["x"] >= frame["x"] and item["y"] >= frame["y"] and
-                (item["x"] + item["w"]) <= (frame["x"] + frame["w"]) and
-                (item["y"] + item["h"]) <= (frame["y"] + frame["h"])):
+            
+            # Use center point for detection to be more lenient
+            cx = item["x"] + item["w"] / 2
+            cy = item["y"] + item["h"] / 2
+            
+            if (cx >= frame["x"] and cy >= frame["y"] and
+                cx <= (frame["x"] + frame["w"]) and
+                cy <= (frame["y"] + frame["h"])):
                 contained_items.append(item)
 
         # Create base image with higher resolution
@@ -225,13 +230,16 @@ class StoryboardStore:
         if not frame or frame["type"] != "frame":
             return []
 
-        # Find images inside the frame
+        # Find images inside the frame (center point must be inside)
         image_items = []
         for item in board_data["items"]:
             if item["type"] == "image" and item.get("image_ref"):
-                if (item["x"] >= frame["x"] and item["y"] >= frame["y"] and
-                    (item["x"] + item["w"]) <= (frame["x" ] + frame["w"]) and
-                    (item["y"] + item["h"]) <= (frame["y"] + frame["h"])):
+                cx = item["x"] + item["w"] / 2
+                cy = item["y"] + item["h"] / 2
+                
+                if (cx >= frame["x"] and cy >= frame["y"] and
+                    cx <= (frame["x"] + frame["w"]) and
+                    cy <= (frame["y"] + frame["h"])):
                     image_items.append(item)
 
         if not image_items:
@@ -272,10 +280,21 @@ class StoryboardStore:
         colors = combined_img.getcolors(num_colors * 10)
         
         if not colors: return []
+        
+        # Sort by count first to get the most common ones
         colors.sort(key=lambda x: x[0], reverse=True)
+        top_colors = [c[1] for c in colors[:num_colors]]
+        
+        # Then sort by hue for a nice rainbow-like presentation
+        import colorsys
+        def get_hue(rgb):
+            h, s, v = colorsys.rgb_to_hsv(rgb[0]/255.0, rgb[1]/255.0, rgb[2]/255.0)
+            return h
+        
+        top_colors.sort(key=get_hue)
         
         hex_colors = []
-        for count, rgb in colors[:num_colors]:
+        for rgb in top_colors:
             hex_colors.append('#{:02x}{:02x}{:02x}'.format(rgb[0], rgb[1], rgb[2]))
             
         return hex_colors
