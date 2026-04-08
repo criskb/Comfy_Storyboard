@@ -145,6 +145,21 @@ class StoryboardStore:
                 if os.path.exists(img_path):
                     try:
                         img = Image.open(img_path).convert("RGBA")
+                        
+                        # Apply crop if present
+                        crop = item.get("crop")
+                        if crop:
+                            w, h = img.size
+                            left = int(crop["x"] * w)
+                            top = int(crop["y"] * h)
+                            right = int((crop["x"] + crop["w"]) * w)
+                            bottom = int((crop["y"] + crop["h"]) * h)
+                            left = max(0, min(w - 1, left))
+                            top = max(0, min(h - 1, top))
+                            right = max(left + 1, min(w, right))
+                            bottom = max(top + 1, min(h, bottom))
+                            img = img.crop((left, top, right, bottom))
+
                         # Use LANCZOS for high quality resizing
                         img = img.resize((rel_w, rel_h), Image.Resampling.LANCZOS)
                         
@@ -209,6 +224,72 @@ class StoryboardStore:
         filename = f"flattened_{uuid.uuid4()}.png"
         canvas.save(os.path.join(assets_path, filename))
         return filename
+
+    def get_frame_palette(self, board_id, frame_id, num_colors=8):
+        board_data = self.get_board(board_id)
+        frame = next((i for i in board_data["items"] if i["id"] == frame_id), None)
+        if not frame or frame["type"] != "frame":
+            return []
+
+        # Find images inside the frame
+        image_items = []
+        for item in board_data["items"]:
+            if item["type"] == "image" and item.get("image_ref"):
+                if (item["x"] >= frame["x"] and item["y"] >= frame["y"] and
+                    (item["x"] + item["w"]) <= (frame["x"] + frame["w"]) and
+                    (item["y"] + item["h"]) <= (frame["y"] + frame["h"])):
+                    image_items.append(item)
+
+        if not image_items:
+            return []
+
+        from PIL import Image
+        combined_width = 100 * len(image_items)
+        combined_img = Image.new("RGB", (combined_width, 100))
+        
+        assets_path = self._get_assets_path(board_id)
+        valid_images = 0
+        for i, item in enumerate(image_items):
+            img_path = os.path.join(assets_path, item["image_ref"])
+            if os.path.exists(img_path):
+                try:
+                    img = Image.open(img_path).convert("RGB")
+                    # Apply crop if exists for better palette accuracy
+                    crop = item.get("crop")
+                    if crop:
+                        w, h = img.size
+                        left = int(crop["x"] * w)
+                        top = int(crop["y"] * h)
+                        right = int((crop["x"] + crop["w"]) * w)
+                        bottom = int((crop["y"] + crop["h"]) * h)
+                        img = img.crop((left, top, right, bottom))
+                    
+                    img = img.resize((100, 100), Image.Resampling.NEAREST)
+                    combined_img.paste(img, (valid_images * 100, 0))
+                    valid_images += 1
+                except:
+                    continue
+
+        if valid_images == 0:
+            return []
+
+        # Crop to used area
+        combined_img = combined_img.crop((0, 0, valid_images * 100, 100))
+        
+        # Use quantization to find dominant colors
+        # We use a small number of colors and then extract them
+        palette_img = combined_img.quantize(colors=num_colors, method=Image.Resampling.MAXCOVERAGE).convert("RGB")
+        colors = palette_img.getcolors(num_colors * num_colors)
+        
+        # Sort by frequency and take top num_colors
+        if not colors: return []
+        colors.sort(key=lambda x: x[0], reverse=True)
+        
+        hex_colors = []
+        for count, rgb in colors[:num_colors]:
+            hex_colors.append('#{:02x}{:02x}{:02x}'.format(rgb[0], rgb[1], rgb[2]))
+            
+        return hex_colors
 
     def rename_board(self, old_id, new_id):
         old_path = self._get_board_path(old_id)

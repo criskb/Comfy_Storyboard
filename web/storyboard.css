@@ -258,16 +258,96 @@
     text-transform: uppercase;
 }
 
-.storyboard-item.image-item {
+.storyboard-crop-glyph {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    z-index: 10;
+    opacity: 0;
+    transition: opacity 0.2s, background 0.2s, transform 0.2s;
+    font-size: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.storyboard-item:hover .storyboard-crop-glyph {
+    opacity: 1;
+}
+
+.storyboard-crop-glyph:hover {
+    background: #2196F3;
+    transform: scale(1.1);
+}
+
+.storyboard-crop-glyph.active {
+    background: #2196F3;
+    opacity: 1;
+}
+
+.storyboard-crop-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 8;
+    cursor: crosshair;
+    display: none;
     border-radius: 12px;
 }
 
-.storyboard-item.image-item img {
+.storyboard-item.cropping .storyboard-crop-overlay {
+    display: block;
+}
+
+.storyboard-crop-box {
+    position: absolute;
+    border: 2px solid #2196F3;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+    box-sizing: border-box;
+}
+
+.storyboard-crop-handle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: #2196F3;
+    border: 1px solid white;
+    border-radius: 50%;
+}
+
+.crop-handle-nw { top: -5px; left: -5px; cursor: nw-resize; }
+.crop-handle-ne { top: -5px; right: -5px; cursor: ne-resize; }
+.crop-handle-sw { bottom: -5px; left: -5px; cursor: sw-resize; }
+.crop-handle-se { bottom: -5px; right: -5px; cursor: se-resize; }
+
+.storyboard-item.image-item {
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.storyboard-item.image-item .image-wrapper {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    overflow: hidden;
+    position: relative;
+}
+
+.storyboard-item.image-item img {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: fill; /* We'll handle cropping via positioning */
     display: block;
-    border-radius: 9px; /* Slightly smaller than container to look nice */
 }
 
 .storyboard-item.slot-item {
@@ -362,6 +442,42 @@
     font-family: sans-serif;
     border-radius: 8px 8px 0 0;
     font-weight: bold;
+}
+
+.frame-palette-bar {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    right: 10px;
+    height: 24px;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 12px;
+    display: flex;
+    padding: 3px;
+    gap: 4px;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 5;
+    overflow: hidden;
+}
+
+.palette-color {
+    flex: 1;
+    height: 100%;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.palette-color:hover {
+    transform: scaleY(1.2);
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+    z-index: 6;
+}
+
+.palette-color:active {
+    transform: scale(0.9);
 }
 
 .color-presets {

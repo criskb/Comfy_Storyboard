@@ -53,6 +53,13 @@ class StoryboardAPI:
                 return web.json_response({"status": "ok", "filename": filename})
             return web.json_response({"status": "error"}, status=400)
 
+        @server.routes.get("/mkr/storyboard/{board_id}/palette/{frame_id}")
+        async def get_frame_palette(request):
+            board_id = request.match_info["board_id"]
+            frame_id = request.match_info["frame_id"]
+            colors = store.get_frame_palette(board_id, frame_id)
+            return web.json_response({"colors": colors})
+
         @server.routes.post("/mkr/storyboard/{board_id}/fill")
         async def fill_placeholder(request):
             board_id = request.match_info["board_id"]

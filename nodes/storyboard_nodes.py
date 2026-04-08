@@ -71,6 +71,22 @@ class Storyboard:
 
             if img_path and os.path.exists(img_path):
                 img = Image.open(img_path).convert("RGB")
+                
+                # Apply crop if present
+                crop = item.get("crop")
+                if crop:
+                    w, h = img.size
+                    left = int(crop["x"] * w)
+                    top = int(crop["y"] * h)
+                    right = int((crop["x"] + crop["w"]) * w)
+                    bottom = int((crop["y"] + crop["h"]) * h)
+                    # Ensure valid crop boundaries
+                    left = max(0, min(w - 1, left))
+                    top = max(0, min(h - 1, top))
+                    right = max(left + 1, min(w, right))
+                    bottom = max(top + 1, min(h, bottom))
+                    img = img.crop((left, top, right, bottom))
+
                 img_np = np.array(img).astype(np.float32) / 255.0
                 refs[ref_idx - 1] = torch.from_numpy(img_np).unsqueeze(0)
         

@@ -53,6 +53,8 @@ class StoryboardWorkspace {
         this.offset = { x: 0, y: 0 };
         this.itemElements = new Map();
         this.isInteracting = false;
+        this.paletteCache = new Map(); // frameId -> colors[]
+        this.paletteLoading = new Set(); // frameIds currently fetching
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
@@ -404,6 +406,32 @@ class StoryboardWorkspace {
     addItemInteractions(el, initialItem) {
         const itemId = initialItem.id;
         
+        // Crop glyph
+        if (initialItem.type === "image") {
+            const cropGlyph = document.createElement("div");
+            cropGlyph.className = "storyboard-crop-glyph";
+            cropGlyph.innerHTML = "✂️";
+            cropGlyph.title = "Edit Crop";
+            cropGlyph.onclick = (e) => {
+                e.stopPropagation();
+                const item = this.boardData.items.find(i => i.id === itemId);
+                if (!item) return;
+                
+                el.classList.toggle("cropping");
+                cropGlyph.classList.toggle("active");
+                
+                if (el.classList.contains("cropping")) {
+                    this.isInteracting = true;
+                    this.renderCropUI(el, item);
+                } else {
+                    this.isInteracting = false;
+                    this.saveBoard();
+                    this.renderBoard();
+                }
+            };
+            el.appendChild(cropGlyph);
+        }
+
         // Resize handle
         const resizeHandle = document.createElement("div");
         resizeHandle.className = "storyboard-resize-handle";
@@ -530,6 +558,144 @@ class StoryboardWorkspace {
         };
     }
 
+    renderCropUI(el, item) {
+        let overlay = el.querySelector(".storyboard-crop-overlay");
+        if (!overlay) {
+            overlay = document.createElement("div");
+            overlay.className = "storyboard-crop-overlay";
+            overlay.innerHTML = `
+                <div class="storyboard-crop-box">
+                    <div class="storyboard-crop-handle crop-handle-nw"></div>
+                    <div class="storyboard-crop-handle crop-handle-ne"></div>
+                    <div class="storyboard-crop-handle crop-handle-sw"></div>
+                    <div class="storyboard-crop-handle crop-handle-se"></div>
+                </div>
+            `;
+            el.appendChild(overlay);
+        }
+
+        const cropBox = overlay.querySelector(".storyboard-crop-box");
+        const crop = item.crop || { x: 0, y: 0, w: 1, h: 1 };
+        
+        const updateBox = () => {
+            cropBox.style.left = `${crop.x * 100}%`;
+            cropBox.style.top = `${crop.y * 100}%`;
+            cropBox.style.width = `${crop.w * 100}%`;
+            cropBox.style.height = `${crop.h * 100}%`;
+            item.crop = { ...crop };
+            
+            // Preview the crop in real-time
+            const img = el.querySelector("img");
+            if (img) {
+                const scaleX = 1 / Math.max(0.01, crop.w);
+                const scaleY = 1 / Math.max(0.01, crop.h);
+                img.style.width = `${scaleX * 100}%`;
+                img.style.height = `${scaleY * 100}%`;
+                img.style.left = `${-crop.x * scaleX * 100}%`;
+                img.style.top = `${-crop.y * scaleY * 100}%`;
+            }
+        };
+
+        updateBox();
+
+        // Drag to move the entire crop box
+        cropBox.onmousedown = (e) => {
+            if (e.target !== cropBox) return;
+            e.stopPropagation();
+            const rect = overlay.getBoundingClientRect();
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const initialX = crop.x;
+            const initialY = crop.y;
+
+            const onMouseMove = (moveEvent) => {
+                const dx = (moveEvent.clientX - startX) / rect.width;
+                const dy = (moveEvent.clientY - startY) / rect.height;
+                
+                crop.x = Math.max(0, Math.min(1 - crop.w, initialX + dx));
+                crop.y = Math.max(0, Math.min(1 - crop.h, initialY + dy));
+                updateBox();
+            };
+
+            const onMouseUp = () => {
+                window.removeEventListener("mousemove", onMouseMove);
+                window.removeEventListener("mouseup", onMouseUp);
+            };
+
+            window.addEventListener("mousemove", onMouseMove);
+            window.addEventListener("mouseup", onMouseUp);
+        };
+
+        overlay.onmousedown = (e) => {
+            if (e.target !== overlay) return;
+            e.stopPropagation();
+            const rect = overlay.getBoundingClientRect();
+            const startX = (e.clientX - rect.left) / rect.width;
+            const startY = (e.clientY - rect.top) / rect.height;
+            
+            crop.x = startX;
+            crop.y = startY;
+            crop.w = 0;
+            crop.h = 0;
+
+            const onMouseMove = (moveEvent) => {
+                const currentX = (moveEvent.clientX - rect.left) / rect.width;
+                const currentY = (moveEvent.clientY - rect.top) / rect.height;
+                
+                crop.w = Math.max(0.01, Math.min(1 - crop.x, currentX - crop.x));
+                crop.h = Math.max(0.01, Math.min(1 - crop.y, currentY - crop.y));
+                updateBox();
+            };
+
+            const onMouseUp = () => {
+                window.removeEventListener("mousemove", onMouseMove);
+                window.removeEventListener("mouseup", onMouseUp);
+            };
+
+            window.addEventListener("mousemove", onMouseMove);
+            window.addEventListener("mouseup", onMouseUp);
+        };
+
+        overlay.querySelectorAll(".storyboard-crop-handle").forEach(handle => {
+            handle.onmousedown = (e) => {
+                e.stopPropagation();
+                const rect = overlay.getBoundingClientRect();
+                const isWest = handle.classList.contains("crop-handle-nw") || handle.classList.contains("crop-handle-sw");
+                const isNorth = handle.classList.contains("crop-handle-nw") || handle.classList.contains("crop-handle-ne");
+
+                const onMouseMove = (moveEvent) => {
+                    const currentX = (moveEvent.clientX - rect.left) / rect.width;
+                    const currentY = (moveEvent.clientY - rect.top) / rect.height;
+
+                    if (isWest) {
+                        const right = crop.x + crop.w;
+                        crop.x = Math.max(0, Math.min(right - 0.01, currentX));
+                        crop.w = right - crop.x;
+                    } else {
+                        crop.w = Math.max(0.01, Math.min(1 - crop.x, currentX - crop.x));
+                    }
+
+                    if (isNorth) {
+                        const bottom = crop.y + crop.h;
+                        crop.y = Math.max(0, Math.min(bottom - 0.01, currentY));
+                        crop.h = bottom - crop.y;
+                    } else {
+                        crop.h = Math.max(0.01, Math.min(1 - crop.y, currentY - crop.y));
+                    }
+                    updateBox();
+                };
+
+                const onMouseUp = () => {
+                    window.removeEventListener("mousemove", onMouseMove);
+                    window.removeEventListener("mouseup", onMouseUp);
+                };
+
+                window.addEventListener("mousemove", onMouseMove);
+                window.addEventListener("mouseup", onMouseUp);
+            };
+        });
+    }
+
     updateItemContent(el, item, isNew) {
         // Reference Pill
         let pill = el.querySelector(".storyboard-ref-pill");
@@ -546,14 +712,41 @@ class StoryboardWorkspace {
 
         if (item.type === "image") {
             el.classList.add("image-item");
-            let img = el.querySelector("img");
+            let wrapper = el.querySelector(".image-wrapper");
+            if (!wrapper) {
+                wrapper = document.createElement("div");
+                wrapper.className = "image-wrapper";
+                el.appendChild(wrapper);
+            }
+            
+            let img = wrapper.querySelector("img");
             if (!img) {
                 img = document.createElement("img");
                 img.draggable = false;
-                el.appendChild(img);
+                wrapper.appendChild(img);
             }
             const src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}?t=${Date.now()}`;
             if (img.src !== src) img.src = src;
+
+            // Apply crop to display
+            if (item.crop) {
+                const { x, y, w, h } = item.crop;
+                // item.crop values are 0-1 (percentage of image)
+                // We want the cropped area to fill the container
+                // So the image needs to be scaled up and shifted
+                const scaleX = 1 / w;
+                const scaleY = 1 / h;
+                img.style.width = `${scaleX * 100}%`;
+                img.style.height = `${scaleY * 100}%`;
+                img.style.left = `${-x * scaleX * 100}%`;
+                img.style.top = `${-y * scaleY * 100}%`;
+            } else {
+                img.style.width = "100%";
+                img.style.height = "100%";
+                img.style.left = "0";
+                img.style.top = "0";
+                img.style.objectFit = "cover";
+            }
             
         } else if (item.type === "slot") {
             el.classList.add("slot-item");
@@ -596,7 +789,81 @@ class StoryboardWorkspace {
             }
             label.innerText = item.label || "";
             label.style.backgroundColor = item.color || "#4CAF50";
+
+            // Update palette bar
+            this.updateFramePalette(el, item);
         }
+    }
+
+    async updateFramePalette(el, item) {
+        let paletteBar = el.querySelector(".frame-palette-bar");
+        if (!paletteBar) {
+            paletteBar = document.createElement("div");
+            paletteBar.className = "frame-palette-bar";
+            el.appendChild(paletteBar);
+        }
+
+        // Check if we need to fetch new palette
+        // We compare the list of images inside the frame to decide if we refresh
+        const containedImageIds = this.boardData.items
+            .filter(it => it.type === "image" && it.image_ref &&
+                it.x >= item.x && it.y >= item.y &&
+                (it.x + it.w) <= (item.x + item.w) &&
+                (it.y + it.h) <= (item.y + item.h))
+            .map(it => it.id)
+            .sort()
+            .join(",");
+
+        const cacheKey = `${item.id}_${containedImageIds}`;
+        const cached = this.paletteCache.get(item.id);
+
+        if (cached && cached.key === cacheKey) {
+            this.renderPaletteColors(paletteBar, cached.colors);
+            return;
+        }
+
+        if (this.paletteLoading.has(item.id)) return;
+
+        if (!containedImageIds) {
+            paletteBar.innerHTML = "";
+            return;
+        }
+
+        // Fetch new palette
+        this.paletteLoading.add(item.id);
+        try {
+            const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/${item.id}`);
+            const { colors } = await response.json();
+            if (colors && colors.length > 0) {
+                this.paletteCache.set(item.id, { key: cacheKey, colors });
+                this.renderPaletteColors(paletteBar, colors);
+            } else {
+                paletteBar.innerHTML = "";
+            }
+        } catch (err) {
+            console.error("Failed to fetch palette:", err);
+        } finally {
+            this.paletteLoading.delete(item.id);
+        }
+    }
+
+    renderPaletteColors(bar, colors) {
+        bar.innerHTML = "";
+        colors.forEach(c => {
+            const dot = document.createElement("div");
+            dot.className = "palette-color";
+            dot.style.backgroundColor = c;
+            dot.title = `Click to copy: ${c}`;
+            dot.onclick = (e) => {
+                e.stopPropagation();
+                navigator.clipboard.writeText(c);
+                // Visual feedback
+                const originalBg = dot.style.backgroundColor;
+                dot.style.boxShadow = "0 0 15px white";
+                setTimeout(() => dot.style.boxShadow = "", 200);
+            };
+            bar.appendChild(dot);
+        });
     }
 
     renderInspector() {
