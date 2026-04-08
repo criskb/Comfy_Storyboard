@@ -317,17 +317,30 @@
 
 .storyboard-crop-handle {
     position: absolute;
-    width: 10px;
-    height: 10px;
     background: #2196F3;
     border: 1px solid white;
-    border-radius: 50%;
+    z-index: 100;
 }
 
-.crop-handle-nw { top: -5px; left: -5px; cursor: nw-resize; }
-.crop-handle-ne { top: -5px; right: -5px; cursor: ne-resize; }
-.crop-handle-sw { bottom: -5px; left: -5px; cursor: sw-resize; }
-.crop-handle-se { bottom: -5px; right: -5px; cursor: se-resize; }
+.crop-handle-top { top: -5px; left: 50%; transform: translateX(-50%); width: 30px; height: 10px; cursor: ns-resize; border-radius: 5px; }
+.crop-handle-bottom { bottom: -5px; left: 50%; transform: translateX(-50%); width: 30px; height: 10px; cursor: ns-resize; border-radius: 5px; }
+.crop-handle-left { left: -5px; top: 50%; transform: translateY(-50%); height: 30px; width: 10px; cursor: ew-resize; border-radius: 5px; }
+.crop-handle-right { right: -5px; top: 50%; transform: translateY(-50%); height: 30px; width: 10px; cursor: ew-resize; border-radius: 5px; }
+
+.palette-color span {
+    transform: rotate(-90deg);
+    white-space: nowrap;
+    pointer-events: none;
+    letter-spacing: 1px;
+}
+
+.palette-color:hover {
+    transform: translateY(-8px);
+}
+
+.palette-color:active {
+    transform: scale(0.95);
+}
 
 .storyboard-item.image-item {
     border-radius: 12px;
@@ -345,7 +358,7 @@
     position: absolute;
     width: 100%;
     height: 100%;
-    object-fit: fill; /* We'll handle cropping via positioning */
+    object-fit: cover;
     display: block;
 }
 
@@ -499,12 +512,6 @@
 .palette-color:active {
     transform: scale(0.95);
 }
-
-/* Cropping Edge Handles */
-.storyboard-crop-handle.crop-handle-top { top: -5px; left: 50%; transform: translateX(-50%); width: 30px; height: 10px; cursor: ns-resize; border-radius: 5px; }
-.storyboard-crop-handle.crop-handle-bottom { bottom: -5px; left: 50%; transform: translateX(-50%); width: 30px; height: 10px; cursor: ns-resize; border-radius: 5px; }
-.storyboard-crop-handle.crop-handle-left { left: -5px; top: 50%; transform: translateY(-50%); height: 30px; width: 10px; cursor: ew-resize; border-radius: 5px; }
-.storyboard-crop-handle.crop-handle-right { right: -5px; top: 50%; transform: translateY(-50%); height: 30px; width: 10px; cursor: ew-resize; border-radius: 5px; }
 
 .color-presets {
     display: grid;

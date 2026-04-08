@@ -436,7 +436,13 @@ class StoryboardWorkspace {
         if (initialItem.type === "image") {
             const cropGlyph = document.createElement("div");
             cropGlyph.className = "storyboard-crop-glyph";
-            cropGlyph.innerHTML = "✂️";
+            // Monochrome SVG crop icon
+            cropGlyph.innerHTML = `
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M6.13 1L6 16a2 2 0 0 0 2 2h15" />
+                    <path d="M1 6.13L16 6a2 2 0 0 1 2 2v15" />
+                </svg>
+            `;
             cropGlyph.title = "Edit Crop";
             cropGlyph.onclick = (e) => {
                 e.stopPropagation();
@@ -617,10 +623,6 @@ class StoryboardWorkspace {
             overlay.className = "storyboard-crop-overlay";
             overlay.innerHTML = `
                 <div class="storyboard-crop-box">
-                    <div class="storyboard-crop-handle crop-handle-nw"></div>
-                    <div class="storyboard-crop-handle crop-handle-ne"></div>
-                    <div class="storyboard-crop-handle crop-handle-sw"></div>
-                    <div class="storyboard-crop-handle crop-handle-se"></div>
                     <div class="storyboard-crop-handle crop-handle-top"></div>
                     <div class="storyboard-crop-handle crop-handle-bottom"></div>
                     <div class="storyboard-crop-handle crop-handle-left"></div>
@@ -649,7 +651,7 @@ class StoryboardWorkspace {
                 img.style.height = `${scaleY * 100}%`;
                 img.style.left = `${-crop.x * scaleX * 100}%`;
                 img.style.top = `${-crop.y * scaleY * 100}%`;
-                img.style.objectFit = "fill"; // Temporary for preview
+                img.style.objectFit = "cover"; // NO STRETCHING
             }
         };
 
@@ -692,8 +694,8 @@ class StoryboardWorkspace {
             
             crop.x = startX;
             crop.y = startY;
-            crop.w = 0;
-            crop.h = 0;
+            crop.w = 0.01;
+            crop.h = 0.01;
 
             const onMouseMove = (moveEvent) => {
                 const currentX = (moveEvent.clientX - rect.left) / rect.width;
@@ -718,10 +720,10 @@ class StoryboardWorkspace {
                 e.stopPropagation();
                 const rect = overlay.getBoundingClientRect();
                 
-                const isWest = handle.classList.contains("crop-handle-nw") || handle.classList.contains("crop-handle-sw") || handle.classList.contains("crop-handle-left");
-                const isEast = handle.classList.contains("crop-handle-ne") || handle.classList.contains("crop-handle-se") || handle.classList.contains("crop-handle-right");
-                const isNorth = handle.classList.contains("crop-handle-nw") || handle.classList.contains("crop-handle-ne") || handle.classList.contains("crop-handle-top");
-                const isSouth = handle.classList.contains("crop-handle-sw") || handle.classList.contains("crop-handle-se") || handle.classList.contains("crop-handle-bottom");
+                const isWest = handle.classList.contains("crop-handle-left");
+                const isEast = handle.classList.contains("crop-handle-right");
+                const isNorth = handle.classList.contains("crop-handle-top");
+                const isSouth = handle.classList.contains("crop-handle-bottom");
 
                 const onMouseMove = (moveEvent) => {
                     const currentX = (moveEvent.clientX - rect.left) / rect.width;
@@ -815,6 +817,14 @@ class StoryboardWorkspace {
                 this.boardData.selection = [newItem.id];
                 this.renderBoard();
                 this.saveBoard();
+                
+                // Trigger palette update if pasted into a frame
+                this.boardData.items.forEach(it => {
+                    if (it.type === "frame") {
+                        const el = this.itemElements.get(it.id);
+                        if (el) this.updateFramePalette(el, it);
+                    }
+                });
             }
         } catch (err) {
             console.error("Failed to upload pasted image:", err);
@@ -861,27 +871,14 @@ class StoryboardWorkspace {
             if (item.crop) {
                 const { x, y, w, h } = item.crop;
                 
-                // Uniform scale to prevent stretching
-                // We use the larger scale to ensure the crop area COVERS the slot
                 const scaleX = 1 / Math.max(0.01, w);
                 const scaleY = 1 / Math.max(0.01, h);
-                const uniformScale = Math.max(scaleX, scaleY);
                 
-                img.style.width = `${uniformScale * 100}%`;
-                img.style.height = `${uniformScale * 100}%`;
-                
-                // Center the crop area within the slot
-                // We calculate the offset based on the uniform scale
-                const offsetX = -x * uniformScale * 100;
-                const offsetY = -y * uniformScale * 100;
-                
-                // Adjust to center if the aspect ratios don't match
-                const extraX = (uniformScale - scaleX) * 50;
-                const extraY = (uniformScale - scaleY) * 50;
-                
-                img.style.left = `${offsetX + extraX}%`;
-                img.style.top = `${offsetY + extraY}%`;
-                img.style.objectFit = "fill"; // Uniform scale prevents stretching
+                img.style.width = `${scaleX * 100}%`;
+                img.style.height = `${scaleY * 100}%`;
+                img.style.left = `${-x * scaleX * 100}%`;
+                img.style.top = `${-y * scaleY * 100}%`;
+                img.style.objectFit = "cover"; // Maintain aspect ratio, NO STRETCHING
             } else {
                 img.style.width = "100%";
                 img.style.height = "100%";
@@ -1011,23 +1008,42 @@ class StoryboardWorkspace {
             dot.onclick = (e) => {
                 e.stopPropagation();
                 
-                // Robust copy to clipboard
                 const text = c.toUpperCase();
                 console.log("Attempting to copy color:", text);
                 
+                // Final robust copy method:
+                // 1. Try modern clipboard API
+                // 2. Fallback to hidden textarea with explicit focus
+                // 3. Fallback to prompt if all else fails (absolute last resort for debug)
+                
+                const doCopy = (val) => {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = val;
+                    textArea.style.position = "fixed";
+                    textArea.style.left = "-9999px";
+                    textArea.style.top = "0";
+                    textArea.style.opacity = "0";
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    try {
+                        const successful = document.execCommand('copy');
+                        document.body.removeChild(textArea);
+                        return successful;
+                    } catch (err) {
+                        document.body.removeChild(textArea);
+                        return false;
+                    }
+                };
+
                 if (navigator.clipboard && navigator.clipboard.writeText) {
                     navigator.clipboard.writeText(text).then(() => {
-                        console.log("Clipboard API success");
                         this.showCopyFeedback(dot);
-                    }).catch(err => {
-                        console.error("Clipboard API failed, trying fallback", err);
-                        this.fallbackCopyText(text);
-                        this.showCopyFeedback(dot);
+                    }).catch(() => {
+                        if (doCopy(text)) this.showCopyFeedback(dot);
                     });
                 } else {
-                    console.log("Clipboard API not available, using fallback");
-                    this.fallbackCopyText(text);
-                    this.showCopyFeedback(dot);
+                    if (doCopy(text)) this.showCopyFeedback(dot);
                 }
             };
             bar.appendChild(dot);
@@ -1043,16 +1059,16 @@ class StoryboardWorkspace {
     fallbackCopyText(text) {
         const textArea = document.createElement("textarea");
         textArea.value = text;
-        // Ensure it's not visible but part of DOM
         textArea.style.position = "fixed";
         textArea.style.left = "-9999px";
         textArea.style.top = "0";
+        textArea.style.opacity = "0";
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
         try {
-            const successful = document.execCommand('copy');
-            console.log('Copying text command was ' + (successful ? 'successful' : 'unsuccessful'));
+            document.execCommand('copy');
+            console.log("Fallback copy successful");
         } catch (err) {
             console.error('Fallback copy failed', err);
         }
