@@ -457,11 +457,11 @@
 
 .frame-palette-bar {
     position: absolute;
-    bottom: -90px;
+    bottom: -170px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
-    gap: 8px;
+    gap: 12px;
     z-index: 20;
     width: auto;
     justify-content: center;
@@ -472,13 +472,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 80px;
-    border-radius: 14px;
+    width: 56px;
+    height: 160px;
+    border-radius: 28px;
     cursor: pointer;
     transition: transform 0.1s;
     font-family: 'Roboto', sans-serif;
-    font-size: 11px;
+    font-size: 18px;
     font-weight: 900;
     color: white;
     box-sizing: border-box;
@@ -489,15 +489,22 @@
     transform: rotate(-90deg);
     white-space: nowrap;
     pointer-events: none;
+    letter-spacing: 1px;
 }
 
 .palette-color:hover {
-    transform: translateY(-4px);
+    transform: translateY(-8px);
 }
 
 .palette-color:active {
-    transform: scale(0.9);
+    transform: scale(0.95);
 }
+
+/* Cropping Edge Handles */
+.storyboard-crop-handle.crop-handle-top { top: -5px; left: 50%; transform: translateX(-50%); width: 30px; height: 10px; cursor: ns-resize; border-radius: 5px; }
+.storyboard-crop-handle.crop-handle-bottom { bottom: -5px; left: 50%; transform: translateX(-50%); width: 30px; height: 10px; cursor: ns-resize; border-radius: 5px; }
+.storyboard-crop-handle.crop-handle-left { left: -5px; top: 50%; transform: translateY(-50%); height: 30px; width: 10px; cursor: ew-resize; border-radius: 5px; }
+.storyboard-crop-handle.crop-handle-right { right: -5px; top: 50%; transform: translateY(-50%); height: 30px; width: 10px; cursor: ew-resize; border-radius: 5px; }
 
 .color-presets {
     display: grid;

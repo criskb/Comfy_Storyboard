@@ -621,6 +621,10 @@ class StoryboardWorkspace {
                     <div class="storyboard-crop-handle crop-handle-ne"></div>
                     <div class="storyboard-crop-handle crop-handle-sw"></div>
                     <div class="storyboard-crop-handle crop-handle-se"></div>
+                    <div class="storyboard-crop-handle crop-handle-top"></div>
+                    <div class="storyboard-crop-handle crop-handle-bottom"></div>
+                    <div class="storyboard-crop-handle crop-handle-left"></div>
+                    <div class="storyboard-crop-handle crop-handle-right"></div>
                 </div>
             `;
             el.appendChild(overlay);
@@ -645,6 +649,7 @@ class StoryboardWorkspace {
                 img.style.height = `${scaleY * 100}%`;
                 img.style.left = `${-crop.x * scaleX * 100}%`;
                 img.style.top = `${-crop.y * scaleY * 100}%`;
+                img.style.objectFit = "fill"; // Temporary for preview
             }
         };
 
@@ -712,8 +717,11 @@ class StoryboardWorkspace {
             handle.onmousedown = (e) => {
                 e.stopPropagation();
                 const rect = overlay.getBoundingClientRect();
-                const isWest = handle.classList.contains("crop-handle-nw") || handle.classList.contains("crop-handle-sw");
-                const isNorth = handle.classList.contains("crop-handle-nw") || handle.classList.contains("crop-handle-ne");
+                
+                const isWest = handle.classList.contains("crop-handle-nw") || handle.classList.contains("crop-handle-sw") || handle.classList.contains("crop-handle-left");
+                const isEast = handle.classList.contains("crop-handle-ne") || handle.classList.contains("crop-handle-se") || handle.classList.contains("crop-handle-right");
+                const isNorth = handle.classList.contains("crop-handle-nw") || handle.classList.contains("crop-handle-ne") || handle.classList.contains("crop-handle-top");
+                const isSouth = handle.classList.contains("crop-handle-sw") || handle.classList.contains("crop-handle-se") || handle.classList.contains("crop-handle-bottom");
 
                 const onMouseMove = (moveEvent) => {
                     const currentX = (moveEvent.clientX - rect.left) / rect.width;
@@ -723,7 +731,7 @@ class StoryboardWorkspace {
                         const right = crop.x + crop.w;
                         crop.x = Math.max(0, Math.min(right - 0.01, currentX));
                         crop.w = right - crop.x;
-                    } else {
+                    } else if (isEast) {
                         crop.w = Math.max(0.01, Math.min(1 - crop.x, currentX - crop.x));
                     }
 
@@ -731,7 +739,7 @@ class StoryboardWorkspace {
                         const bottom = crop.y + crop.h;
                         crop.y = Math.max(0, Math.min(bottom - 0.01, currentY));
                         crop.h = bottom - crop.y;
-                    } else {
+                    } else if (isSouth) {
                         crop.h = Math.max(0.01, Math.min(1 - crop.y, currentY - crop.y));
                     }
                     updateBox();
@@ -853,19 +861,27 @@ class StoryboardWorkspace {
             if (item.crop) {
                 const { x, y, w, h } = item.crop;
                 
-                // Calculate scale to cover the slot while maintaining aspect ratio
-                // If we want the crop box to EXACTLY fill the slot, we must allow stretching
-                // UNLESS the slot is resized to match the crop ratio.
-                // For now, we'll fix the stretching by using a smarter scale calculation.
-                
+                // Uniform scale to prevent stretching
+                // We use the larger scale to ensure the crop area COVERS the slot
                 const scaleX = 1 / Math.max(0.01, w);
                 const scaleY = 1 / Math.max(0.01, h);
+                const uniformScale = Math.max(scaleX, scaleY);
                 
-                img.style.width = `${scaleX * 100}%`;
-                img.style.height = `${scaleY * 100}%`;
-                img.style.left = `${-x * scaleX * 100}%`;
-                img.style.top = `${-y * scaleY * 100}%`;
-                img.style.objectFit = "cover"; // Maintain aspect ratio within the cropped zoom
+                img.style.width = `${uniformScale * 100}%`;
+                img.style.height = `${uniformScale * 100}%`;
+                
+                // Center the crop area within the slot
+                // We calculate the offset based on the uniform scale
+                const offsetX = -x * uniformScale * 100;
+                const offsetY = -y * uniformScale * 100;
+                
+                // Adjust to center if the aspect ratios don't match
+                const extraX = (uniformScale - scaleX) * 50;
+                const extraY = (uniformScale - scaleY) * 50;
+                
+                img.style.left = `${offsetX + extraX}%`;
+                img.style.top = `${offsetY + extraY}%`;
+                img.style.objectFit = "fill"; // Uniform scale prevents stretching
             } else {
                 img.style.width = "100%";
                 img.style.height = "100%";
@@ -906,7 +922,8 @@ class StoryboardWorkspace {
             
         } else if (item.type === "frame") {
             el.classList.add("frame-item");
-            el.style.borderColor = item.color || "#4CAF50";
+            const frameColor = item.color || "#4CAF50";
+            el.style.borderColor = frameColor;
             let label = el.querySelector(".frame-label");
             if (!label) {
                 label = document.createElement("div");
@@ -914,7 +931,8 @@ class StoryboardWorkspace {
                 el.appendChild(label);
             }
             label.innerText = item.label || "";
-            label.style.backgroundColor = item.color || "#4CAF50";
+            label.style.backgroundColor = frameColor;
+            label.style.color = this.getContrastColor(frameColor);
 
             // Update palette bar
             this.updateFramePalette(el, item);
@@ -929,7 +947,7 @@ class StoryboardWorkspace {
             el.appendChild(paletteBar);
         }
 
-        // Check if we need to fetch new palette
+        // Use a small timeout to ensure boardData is updated if this was called from a move
         const imagesInFrame = this.boardData.items
             .filter(it => it.type === "image" && it.image_ref &&
                 (it.x + it.w / 2) >= item.x && (it.y + it.h / 2) >= item.y &&
@@ -946,6 +964,7 @@ class StoryboardWorkspace {
 
         if (cached && cached.key === cacheKey) {
             this.renderPaletteColors(paletteBar, cached.colors);
+            paletteBar.style.display = "flex";
             return;
         }
 
@@ -953,6 +972,7 @@ class StoryboardWorkspace {
 
         if (imagesInFrame.length === 0) {
             paletteBar.style.display = "none";
+            this.paletteCache.delete(item.id);
             return;
         }
 
@@ -993,14 +1013,19 @@ class StoryboardWorkspace {
                 
                 // Robust copy to clipboard
                 const text = c.toUpperCase();
+                console.log("Attempting to copy color:", text);
+                
                 if (navigator.clipboard && navigator.clipboard.writeText) {
                     navigator.clipboard.writeText(text).then(() => {
+                        console.log("Clipboard API success");
                         this.showCopyFeedback(dot);
                     }).catch(err => {
+                        console.error("Clipboard API failed, trying fallback", err);
                         this.fallbackCopyText(text);
                         this.showCopyFeedback(dot);
                     });
                 } else {
+                    console.log("Clipboard API not available, using fallback");
                     this.fallbackCopyText(text);
                     this.showCopyFeedback(dot);
                 }
@@ -1018,10 +1043,16 @@ class StoryboardWorkspace {
     fallbackCopyText(text) {
         const textArea = document.createElement("textarea");
         textArea.value = text;
+        // Ensure it's not visible but part of DOM
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        textArea.style.top = "0";
         document.body.appendChild(textArea);
+        textArea.focus();
         textArea.select();
         try {
-            document.execCommand('copy');
+            const successful = document.execCommand('copy');
+            console.log('Copying text command was ' + (successful ? 'successful' : 'unsuccessful'));
         } catch (err) {
             console.error('Fallback copy failed', err);
         }
