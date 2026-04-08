@@ -456,6 +456,16 @@ class StoryboardWorkspace {
                 if (!wasCropping) {
                     // Entering cropping mode
                     this.isInteracting = true;
+                    
+                    // Calculate virtual full bounds of image in canvas space
+                    const crop = item.crop || { x: 0, y: 0, w: 1, h: 1 };
+                    const fullW = item.w / crop.w;
+                    const fullH = item.h / crop.h;
+                    const fullX = item.x - (crop.x * fullW);
+                    const fullY = item.y - (crop.y * fullH);
+                    
+                    el._fullBounds = { x: fullX, y: fullY, w: fullW, h: fullH };
+                    
                     this.renderCropUI(el, item);
                 } else {
                     // Exiting cropping mode
@@ -630,105 +640,65 @@ class StoryboardWorkspace {
             overlay = document.createElement("div");
             overlay.className = "storyboard-crop-overlay";
             overlay.innerHTML = `
-                <div class="storyboard-crop-box">
-                    <div class="storyboard-crop-handle crop-handle-top"></div>
-                    <div class="storyboard-crop-handle crop-handle-bottom"></div>
-                    <div class="storyboard-crop-handle crop-handle-left"></div>
-                    <div class="storyboard-crop-handle crop-handle-right"></div>
-                </div>
+                <div class="storyboard-crop-context"></div>
+                <div class="storyboard-crop-handle crop-handle-top"></div>
+                <div class="storyboard-crop-handle crop-handle-bottom"></div>
+                <div class="storyboard-crop-handle crop-handle-left"></div>
+                <div class="storyboard-crop-handle crop-handle-right"></div>
             `;
             el.appendChild(overlay);
         }
 
-        const cropBox = overlay.querySelector(".storyboard-crop-box");
-        const crop = item.crop || { x: 0, y: 0, w: 1, h: 1 };
+        const context = overlay.querySelector(".storyboard-crop-context");
+        const full = el._fullBounds;
         
-        const updateBox = () => {
-            cropBox.style.left = `${crop.x * 100}%`;
-            cropBox.style.top = `${crop.y * 100}%`;
-            cropBox.style.width = `${crop.w * 100}%`;
-            cropBox.style.height = `${crop.h * 100}%`;
-            item.crop = { ...crop };
-            
-            // Preview the crop in real-time
-            const img = el.querySelector("img");
-            if (img) {
-                // Calculate scale to show the crop area
-                const scaleX = 1 / Math.max(0.01, crop.w);
-                const scaleY = 1 / Math.max(0.01, crop.h);
-                
-                img.style.width = `${scaleX * 100}%`;
-                img.style.height = `${scaleY * 100}%`;
-                img.style.left = `${-crop.x * scaleX * 100}%`;
-                img.style.top = `${-crop.y * scaleY * 100}%`;
-                img.style.objectFit = "cover"; 
-            }
-        };
+        // Show full image dimmed in background
+        const src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}`;
+        context.innerHTML = `<img src="${src}" style="position: absolute; pointer-events: none; opacity: 0.3; filter: grayscale(1);">`;
+        const contextImg = context.querySelector("img");
 
-        updateBox();
-
-        // Drag to move the entire crop box
-        cropBox.onmousedown = (e) => {
-            if (e.target !== cropBox) return;
-            e.stopPropagation();
-            const rect = overlay.getBoundingClientRect();
-            const startX = e.clientX;
-            const startY = e.clientY;
-            const initialX = crop.x;
-            const initialY = crop.y;
-
-            const onMouseMove = (moveEvent) => {
-                const dx = (moveEvent.clientX - startX) / rect.width;
-                const dy = (moveEvent.clientY - startY) / rect.height;
-                
-                crop.x = Math.max(0, Math.min(1 - crop.w, initialX + dx));
-                crop.y = Math.max(0, Math.min(1 - crop.h, initialY + dy));
-                updateBox();
+        const updateCrop = () => {
+            // Update item crop data based on current slot relative to full bounds
+            item.crop = {
+                x: (item.x - full.x) / full.w,
+                y: (item.y - full.y) / full.h,
+                w: item.w / full.w,
+                h: item.h / full.h
             };
 
-            const onMouseUp = () => {
-                window.removeEventListener("mousemove", onMouseMove);
-                window.removeEventListener("mouseup", onMouseUp);
-            };
+            // Keep crop within 0-1 bounds
+            item.crop.x = Math.max(0, Math.min(1, item.crop.x));
+            item.crop.y = Math.max(0, Math.min(1, item.crop.y));
+            item.crop.w = Math.max(0.01, Math.min(1 - item.crop.x, item.crop.w));
+            item.crop.h = Math.max(0.01, Math.min(1 - item.crop.y, item.crop.h));
 
-            window.addEventListener("mousemove", onMouseMove);
-            window.addEventListener("mouseup", onMouseUp);
-        };
+            // Sync item element position/size
+            el.style.left = `${item.x}px`;
+            el.style.top = `${item.y}px`;
+            el.style.width = `${item.w}px`;
+            el.style.height = `${item.h}px`;
 
-        overlay.onmousedown = (e) => {
-            if (e.target !== overlay) return;
-            e.stopPropagation();
-            const rect = overlay.getBoundingClientRect();
-            const startX = (e.clientX - rect.left) / rect.width;
-            const startY = (e.clientY - rect.top) / rect.height;
-            
-            crop.x = startX;
-            crop.y = startY;
-            crop.w = 0.01;
-            crop.h = 0.01;
+            // Sync context image to stay pinned in world space
+            const scaleX = full.w / item.w;
+            const scaleY = full.h / item.h;
+            contextImg.style.width = `${scaleX * 100}%`;
+            contextImg.style.height = `${scaleY * 100}%`;
+            contextImg.style.left = `${-(item.x - full.x) * (100 / item.w)}%`;
+            contextImg.style.top = `${-(item.y - full.y) * (100 / item.h)}%`;
 
-            const onMouseMove = (moveEvent) => {
-                const currentX = (moveEvent.clientX - rect.left) / rect.width;
-                const currentY = (moveEvent.clientY - rect.top) / rect.height;
-                
-                crop.w = Math.max(0.01, Math.min(1 - crop.x, currentX - crop.x));
-                crop.h = Math.max(0.01, Math.min(1 - crop.y, currentY - crop.y));
-                updateBox();
-            };
-
-            const onMouseUp = () => {
-                window.removeEventListener("mousemove", onMouseMove);
-                window.removeEventListener("mouseup", onMouseUp);
-            };
-
-            window.addEventListener("mousemove", onMouseMove);
-            window.addEventListener("mouseup", onMouseUp);
+            // Update the actual image inside the slot
+            this.updateItemContent(el, item, false);
         };
 
         overlay.querySelectorAll(".storyboard-crop-handle").forEach(handle => {
             handle.onmousedown = (e) => {
                 e.stopPropagation();
-                const rect = overlay.getBoundingClientRect();
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const initialX = item.x;
+                const initialY = item.y;
+                const initialW = item.w;
+                const initialH = item.h;
                 
                 const isWest = handle.classList.contains("crop-handle-left");
                 const isEast = handle.classList.contains("crop-handle-right");
@@ -736,25 +706,25 @@ class StoryboardWorkspace {
                 const isSouth = handle.classList.contains("crop-handle-bottom");
 
                 const onMouseMove = (moveEvent) => {
-                    const currentX = (moveEvent.clientX - rect.left) / rect.width;
-                    const currentY = (moveEvent.clientY - rect.top) / rect.height;
+                    const dx = (moveEvent.clientX - startX) / this.scale;
+                    const dy = (moveEvent.clientY - startY) / this.scale;
 
                     if (isWest) {
-                        const right = crop.x + crop.w;
-                        crop.x = Math.max(0, Math.min(right - 0.01, currentX));
-                        crop.w = right - crop.x;
+                        const right = initialX + initialW;
+                        item.x = Math.max(full.x, Math.min(right - 10, initialX + dx));
+                        item.w = right - item.x;
                     } else if (isEast) {
-                        crop.w = Math.max(0.01, Math.min(1 - crop.x, currentX - crop.x));
+                        item.w = Math.max(10, Math.min(full.x + full.w - initialX, initialW + dx));
                     }
 
                     if (isNorth) {
-                        const bottom = crop.y + crop.h;
-                        crop.y = Math.max(0, Math.min(bottom - 0.01, currentY));
-                        crop.h = bottom - crop.y;
+                        const bottom = initialY + initialH;
+                        item.y = Math.max(full.y, Math.min(bottom - 10, initialY + dy));
+                        item.h = bottom - item.y;
                     } else if (isSouth) {
-                        crop.h = Math.max(0.01, Math.min(1 - crop.y, currentY - crop.y));
+                        item.h = Math.max(10, Math.min(full.y + full.h - initialY, initialH + dy));
                     }
-                    updateBox();
+                    updateCrop();
                 };
 
                 const onMouseUp = () => {
@@ -766,6 +736,8 @@ class StoryboardWorkspace {
                 window.addEventListener("mouseup", onMouseUp);
             };
         });
+
+        updateCrop();
     }
 
     handleCopy() {
@@ -1064,8 +1036,42 @@ class StoryboardWorkspace {
             dot.onclick = async (e) => {
                 e.stopPropagation();
                 const text = c.toUpperCase();
-                const success = await this.copyToClipboard(text);
+                
+                console.log("Color clicked:", text);
+                
+                // Final ultra-robust copy method
+                let success = false;
+                
+                // 1. Try modern clipboard API
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    try {
+                        await navigator.clipboard.writeText(text);
+                        success = true;
+                    } catch (err) {
+                        console.warn("Async clipboard failed, trying fallback");
+                    }
+                }
+
+                // 2. Try legacy fallback if needed
+                if (!success) {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = text;
+                    textArea.style.position = "fixed";
+                    textArea.style.left = "-9999px";
+                    textArea.style.top = "0";
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    try {
+                        success = document.execCommand('copy');
+                    } catch (err) {
+                        console.error("Fallback copy failed");
+                    }
+                    document.body.removeChild(textArea);
+                }
+
                 if (success) {
+                    console.log("Copy success!");
                     this.showCopyFeedback(dot);
                 }
             };
