@@ -55,19 +55,40 @@ class StoryboardWorkspace {
         this.isInteracting = false;
         this.paletteCache = new Map(); // frameId -> colors[]
         this.paletteLoading = new Set(); // frameIds currently fetching
+        this.internalClipboard = [];
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
             if (this.overlay.style.display === "flex") {
+                const focused = document.activeElement;
+                if (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA") return;
+
                 if (e.key === "Delete") {
-                    const focused = document.activeElement;
-                    if (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA") return;
-                    
                     if (this.boardData.selection.length > 0) {
                         this.boardData.items = this.boardData.items.filter(i => !this.boardData.selection.includes(i.id));
                         this.boardData.selection = [];
                         this.renderBoard();
                         this.saveBoard();
+                    }
+                } else if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+                    this.handleCopy();
+                } else if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+                    this.handlePaste();
+                }
+            }
+        });
+
+        window.addEventListener("paste", (e) => {
+            if (this.overlay.style.display === "flex") {
+                const focused = document.activeElement;
+                if (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA") return;
+                
+                const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+                for (let index in items) {
+                    const item = items[index];
+                    if (item.kind === 'file' && item.type.startsWith('image/')) {
+                        const blob = item.getAsFile();
+                        this.handlePasteImage(blob);
                     }
                 }
             }
@@ -696,6 +717,71 @@ class StoryboardWorkspace {
         });
     }
 
+    handleCopy() {
+        if (this.boardData.selection.length > 0) {
+            this.internalClipboard = this.boardData.selection.map(id => {
+                const item = this.boardData.items.find(i => i.id === id);
+                return { ...item };
+            }).filter(Boolean);
+        }
+    }
+
+    handlePaste() {
+        if (this.internalClipboard.length > 0) {
+            const newSelection = [];
+            this.internalClipboard.forEach(item => {
+                const newItem = {
+                    ...item,
+                    id: this.generateUUID(),
+                    x: item.x + 20,
+                    y: item.y + 20
+                };
+                this.boardData.items.push(newItem);
+                newSelection.push(newItem.id);
+            });
+            this.boardData.selection = newSelection;
+            this.renderBoard();
+            this.saveBoard();
+        }
+    }
+
+    async handlePasteImage(file) {
+        const formData = new FormData();
+        formData.append("image", file);
+        
+        try {
+            const response = await fetch(`/mkr/storyboard/${this.boardId}/upload`, {
+                method: "POST",
+                body: formData
+            });
+            const { filename } = await response.json();
+            
+            if (filename) {
+                // Find a good place to paste (e.g. center of viewport)
+                const viewport = this.canvasContainer.getBoundingClientRect();
+                const centerX = (viewport.width / 2 - this.offset.x) / this.scale;
+                const centerY = (viewport.height / 2 - this.offset.y) / this.scale;
+                
+                const newItem = {
+                    id: this.generateUUID(),
+                    type: "image",
+                    x: centerX - 256,
+                    y: centerY - 256,
+                    w: 512,
+                    h: 512,
+                    image_ref: filename,
+                    label: "Pasted Image"
+                };
+                this.boardData.items.push(newItem);
+                this.boardData.selection = [newItem.id];
+                this.renderBoard();
+                this.saveBoard();
+            }
+        } catch (err) {
+            console.error("Failed to upload pasted image:", err);
+        }
+    }
+
     updateItemContent(el, item, isNew) {
         // Reference Pill
         let pill = el.querySelector(".storyboard-ref-pill");
@@ -725,21 +811,23 @@ class StoryboardWorkspace {
                 img.draggable = false;
                 wrapper.appendChild(img);
             }
-            const src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}?t=${Date.now()}`;
-            if (img.src !== src) img.src = src;
+            // Use item.image_ref directly as cache key, don't force-reload with timestamp every render
+            const src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}`;
+            if (img.getAttribute("data-src") !== src) {
+                img.src = src + `?t=${Date.now()}`;
+                img.setAttribute("data-src", src);
+            }
 
             // Apply crop to display
             if (item.crop) {
                 const { x, y, w, h } = item.crop;
-                // item.crop values are 0-1 (percentage of image)
-                // We want the cropped area to fill the container
-                // So the image needs to be scaled up and shifted
-                const scaleX = 1 / w;
-                const scaleY = 1 / h;
+                const scaleX = 1 / Math.max(0.01, w);
+                const scaleY = 1 / Math.max(0.01, h);
                 img.style.width = `${scaleX * 100}%`;
                 img.style.height = `${scaleY * 100}%`;
                 img.style.left = `${-x * scaleX * 100}%`;
                 img.style.top = `${-y * scaleY * 100}%`;
+                img.style.objectFit = "fill";
             } else {
                 img.style.width = "100%";
                 img.style.height = "100%";
@@ -804,13 +892,14 @@ class StoryboardWorkspace {
         }
 
         // Check if we need to fetch new palette
-        // We compare the list of images inside the frame to decide if we refresh
-        const containedImageIds = this.boardData.items
+        const imagesInFrame = this.boardData.items
             .filter(it => it.type === "image" && it.image_ref &&
                 it.x >= item.x && it.y >= item.y &&
                 (it.x + it.w) <= (item.x + item.w) &&
-                (it.y + it.h) <= (item.y + item.h))
-            .map(it => it.id)
+                (it.y + it.h) <= (item.y + item.h));
+        
+        const containedImageIds = imagesInFrame
+            .map(it => `${it.id}_${it.image_ref}_${JSON.stringify(it.crop || {})}`)
             .sort()
             .join(",");
 
@@ -824,12 +913,12 @@ class StoryboardWorkspace {
 
         if (this.paletteLoading.has(item.id)) return;
 
-        if (!containedImageIds) {
-            paletteBar.innerHTML = "";
+        if (imagesInFrame.length === 0) {
+            paletteBar.style.display = "none";
             return;
         }
 
-        // Fetch new palette
+        paletteBar.style.display = "flex";
         this.paletteLoading.add(item.id);
         try {
             const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/${item.id}`);
@@ -838,10 +927,11 @@ class StoryboardWorkspace {
                 this.paletteCache.set(item.id, { key: cacheKey, colors });
                 this.renderPaletteColors(paletteBar, colors);
             } else {
-                paletteBar.innerHTML = "";
+                paletteBar.style.display = "none";
             }
         } catch (err) {
             console.error("Failed to fetch palette:", err);
+            paletteBar.style.display = "none";
         } finally {
             this.paletteLoading.delete(item.id);
         }
@@ -1137,6 +1227,13 @@ class StoryboardWorkspace {
         // Simple pan and zoom logic
         let isPanning = false;
         let startPos = { x: 0, y: 0 };
+
+        // Global click listener to close context menu
+        window.addEventListener("click", (e) => {
+            if (this.contextMenu && !this.contextMenu.contains(e.target)) {
+                this.contextMenu.style.display = "none";
+            }
+        });
 
         this.canvasContainer.onmousedown = (e) => {
             // Deselect if clicking the canvas directly

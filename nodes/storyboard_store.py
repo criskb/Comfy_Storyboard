@@ -190,22 +190,16 @@ class StoryboardStore:
                     content = item.get("content", "")
                     if content:
                         note_draw = ImageDraw.Draw(canvas)
-                        # Estimate font size
                         text_len = len(content)
                         area = rel_w * rel_h
                         font_size = int(np.sqrt(area / (text_len or 1)) * 0.8)
                         font_size = max(int(12 * scale), min(font_size, int(rel_h * 0.5)))
                         
                         try:
-                            # Try to use a common font
                             font = ImageFont.load_default()
-                            # If we had a way to load Roboto or similar, it would be better
                         except:
                             font = ImageFont.load_default()
                             
-                        # Simplified text centering for PIL
-                        # In a real app we'd use font.getbbox() but load_default() is limited
-                        # We'll just draw it in the middle for now
                         note_draw.text((rel_x + rel_w/2, rel_y + rel_h/2), content, fill=(0,0,0,255), anchor="mm")
 
             elif item["type"] == "slot":
@@ -236,7 +230,7 @@ class StoryboardStore:
         for item in board_data["items"]:
             if item["type"] == "image" and item.get("image_ref"):
                 if (item["x"] >= frame["x"] and item["y"] >= frame["y"] and
-                    (item["x"] + item["w"]) <= (frame["x"] + frame["w"]) and
+                    (item["x"] + item["w"]) <= (frame["x" ] + frame["w"]) and
                     (item["y"] + item["h"]) <= (frame["y"] + frame["h"])):
                     image_items.append(item)
 
@@ -244,8 +238,7 @@ class StoryboardStore:
             return []
 
         from PIL import Image
-        combined_width = 100 * len(image_items)
-        combined_img = Image.new("RGB", (combined_width, 100))
+        combined_img = Image.new("RGB", (100 * len(image_items), 100))
         
         assets_path = self._get_assets_path(board_id)
         valid_images = 0
@@ -254,7 +247,6 @@ class StoryboardStore:
             if os.path.exists(img_path):
                 try:
                     img = Image.open(img_path).convert("RGB")
-                    # Apply crop if exists for better palette accuracy
                     crop = item.get("crop")
                     if crop:
                         w, h = img.size
@@ -273,15 +265,12 @@ class StoryboardStore:
         if valid_images == 0:
             return []
 
-        # Crop to used area
         combined_img = combined_img.crop((0, 0, valid_images * 100, 100))
         
-        # Use quantization to find dominant colors
-        # We use a small number of colors and then extract them
-        palette_img = combined_img.quantize(colors=num_colors, method=Image.Resampling.MAXCOVERAGE).convert("RGB")
-        colors = palette_img.getcolors(num_colors * num_colors)
+        # Simpler quantization for robustness
+        combined_img = combined_img.convert("P", palette=Image.Palette.ADAPTIVE, colors=num_colors).convert("RGB")
+        colors = combined_img.getcolors(num_colors * 10)
         
-        # Sort by frequency and take top num_colors
         if not colors: return []
         colors.sort(key=lambda x: x[0], reverse=True)
         
