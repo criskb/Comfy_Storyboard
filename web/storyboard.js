@@ -510,6 +510,14 @@ class StoryboardWorkspace {
                 } else {
                     this.saveBoard();
                     this.renderBoard();
+                    
+                    // Force update palettes after drag/resize finishes
+                    this.boardData.items.forEach(it => {
+                        if (it.type === "frame") {
+                            const el = this.itemElements.get(it.id);
+                            if (el) this.updateFramePalette(el, it);
+                        }
+                    });
                 }
             };
 
@@ -586,6 +594,14 @@ class StoryboardWorkspace {
                 } else {
                     this.saveBoard();
                     this.renderBoard();
+
+                    // Force update palettes after drag/resize finishes
+                    this.boardData.items.forEach(it => {
+                        if (it.type === "frame") {
+                            const el = this.itemElements.get(it.id);
+                            if (el) this.updateFramePalette(el, it);
+                        }
+                    });
                 }
             };
 
@@ -836,13 +852,20 @@ class StoryboardWorkspace {
             // Apply crop to display
             if (item.crop) {
                 const { x, y, w, h } = item.crop;
+                
+                // Calculate scale to cover the slot while maintaining aspect ratio
+                // If we want the crop box to EXACTLY fill the slot, we must allow stretching
+                // UNLESS the slot is resized to match the crop ratio.
+                // For now, we'll fix the stretching by using a smarter scale calculation.
+                
                 const scaleX = 1 / Math.max(0.01, w);
                 const scaleY = 1 / Math.max(0.01, h);
+                
                 img.style.width = `${scaleX * 100}%`;
                 img.style.height = `${scaleY * 100}%`;
                 img.style.left = `${-x * scaleX * 100}%`;
                 img.style.top = `${-y * scaleY * 100}%`;
-                img.style.objectFit = "fill";
+                img.style.objectFit = "cover"; // Maintain aspect ratio within the cropped zoom
             } else {
                 img.style.width = "100%";
                 img.style.height = "100%";
@@ -959,17 +982,50 @@ class StoryboardWorkspace {
             dot.className = "palette-color";
             dot.style.backgroundColor = c;
             dot.style.color = this.getContrastColor(c);
-            dot.innerText = c.toUpperCase();
+            
+            const span = document.createElement("span");
+            span.innerText = c.toUpperCase();
+            dot.appendChild(span);
+            
             dot.title = `Click to copy: ${c}`;
             dot.onclick = (e) => {
                 e.stopPropagation();
-                navigator.clipboard.writeText(c);
-                // Visual feedback
-                dot.style.boxShadow = "0 0 15px white";
-                setTimeout(() => dot.style.boxShadow = "", 200);
+                
+                // Robust copy to clipboard
+                const text = c.toUpperCase();
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        this.showCopyFeedback(dot);
+                    }).catch(err => {
+                        this.fallbackCopyText(text);
+                        this.showCopyFeedback(dot);
+                    });
+                } else {
+                    this.fallbackCopyText(text);
+                    this.showCopyFeedback(dot);
+                }
             };
             bar.appendChild(dot);
         });
+    }
+
+    showCopyFeedback(el) {
+        const originalTransform = el.style.transform;
+        el.style.transform = "scale(1.2)";
+        setTimeout(() => el.style.transform = originalTransform, 200);
+    }
+
+    fallbackCopyText(text) {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+        } catch (err) {
+            console.error('Fallback copy failed', err);
+        }
+        document.body.removeChild(textArea);
     }
 
     renderInspector() {
