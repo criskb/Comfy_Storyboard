@@ -1,5 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { createImageItem } from "./storyboard_item_utils.js";
+import { copyTextToClipboard } from "./storyboard_clipboard.js";
 
 // Load CSS
 const link = document.createElement("link");
@@ -380,7 +382,6 @@ class StoryboardWorkspace {
             return v.toString(16);
         });
     }
-
     renderBoard() {
         // Track which items are current to remove old ones later
         const currentItemIds = new Set(this.boardData.items.map(i => i.id));
@@ -777,7 +778,8 @@ class StoryboardWorkspace {
                 method: "POST",
                 body: formData
             });
-            const { filename } = await response.json();
+            const result = await response.json();
+            const { filename, width, height } = result;
             
             if (filename) {
                 // Find a good place to paste (e.g. center of viewport)
@@ -785,16 +787,17 @@ class StoryboardWorkspace {
                 const centerX = (viewport.width / 2 - this.offset.x) / this.scale;
                 const centerY = (viewport.height / 2 - this.offset.y) / this.scale;
                 
-                const newItem = {
-                    id: this.generateUUID(),
-                    type: "image",
-                    x: centerX - 256,
-                    y: centerY - 256,
-                    w: 512,
-                    h: 512,
-                    image_ref: filename,
-                    label: "Pasted Image"
-                };
+                const newItem = createImageItem({
+                    x: centerX,
+                    y: centerY,
+                    imageRef: filename,
+                    label: "Pasted Image",
+                    imageWidth: width,
+                    imageHeight: height,
+                    generateId: () => this.generateUUID()
+                });
+                newItem.x -= newItem.w / 2;
+                newItem.y -= newItem.h / 2;
                 this.boardData.items.push(newItem);
                 this.boardData.selection = [newItem.id];
                 this.renderBoard();
@@ -979,45 +982,7 @@ class StoryboardWorkspace {
 
     async copyToClipboard(text) {
         console.log("Copying to clipboard:", text);
-        
-        // Method 1: Modern Async Clipboard API
-        if (navigator.clipboard && window.isSecureContext) {
-            try {
-                await navigator.clipboard.writeText(text);
-                return true;
-            } catch (err) {
-                console.warn("Async clipboard failed, trying fallback:", err);
-            }
-        }
-
-        // Method 2: Legacy execCommand('copy')
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-9999px";
-        textArea.style.top = "0";
-        textArea.style.opacity = "0";
-        document.body.appendChild(textArea);
-        
-        // Save current focus
-        const activeEl = document.activeElement;
-        
-        textArea.focus();
-        textArea.select();
-        
-        let success = false;
-        try {
-            success = document.execCommand('copy');
-        } catch (err) {
-            console.error("Legacy copy failed:", err);
-        }
-        
-        document.body.removeChild(textArea);
-        
-        // Restore focus
-        if (activeEl) activeEl.focus();
-        
-        return success;
+        return copyTextToClipboard(text);
     }
 
     renderPaletteColors(bar, colors) {
@@ -1039,40 +1004,13 @@ class StoryboardWorkspace {
                 
                 console.log("Color clicked:", text);
                 
-                // Final ultra-robust copy method
-                let success = false;
-                
-                // 1. Try modern clipboard API
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    try {
-                        await navigator.clipboard.writeText(text);
-                        success = true;
-                    } catch (err) {
-                        console.warn("Async clipboard failed, trying fallback");
-                    }
-                }
-
-                // 2. Try legacy fallback if needed
-                if (!success) {
-                    const textArea = document.createElement("textarea");
-                    textArea.value = text;
-                    textArea.style.position = "fixed";
-                    textArea.style.left = "-9999px";
-                    textArea.style.top = "0";
-                    document.body.appendChild(textArea);
-                    textArea.focus();
-                    textArea.select();
-                    try {
-                        success = document.execCommand('copy');
-                    } catch (err) {
-                        console.error("Fallback copy failed");
-                    }
-                    document.body.removeChild(textArea);
-                }
+                const success = await this.copyToClipboard(text);
 
                 if (success) {
                     console.log("Copy success!");
                     this.showCopyFeedback(dot);
+                } else {
+                    console.warn(`Copy failed for ${text}`);
                 }
             };
             bar.appendChild(dot);
@@ -1430,15 +1368,15 @@ class StoryboardWorkspace {
                     
                     const result = await response.json();
                     if (result.filename) {
-                        this.boardData.items.push({
-                            id: this.generateUUID(),
-                            type: "image",
+                        this.boardData.items.push(createImageItem({
                             x: -this.offset.x / this.scale + 100,
                             y: -this.offset.y / this.scale + 100,
-                            w: 512,
-                            h: 512,
-                            image_ref: result.filename
-                        });
+                            imageRef: result.filename,
+                            label: "Pasted Image",
+                            imageWidth: result.width,
+                            imageHeight: result.height,
+                            generateId: () => this.generateUUID()
+                        }));
                         this.renderBoard();
                         await this.saveBoard();
                     }
@@ -1467,15 +1405,15 @@ class StoryboardWorkspace {
                     
                     const result = await response.json();
                     if (result.filename) {
-                        this.boardData.items.push({
-                            id: this.generateUUID(),
-                            type: "image",
+                        this.boardData.items.push(createImageItem({
                             x: mouseX,
                             y: mouseY,
-                            w: 512,
-                            h: 512,
-                            image_ref: result.filename
-                        });
+                            imageRef: result.filename,
+                            label: file.name || "Dropped Image",
+                            imageWidth: result.width,
+                            imageHeight: result.height,
+                            generateId: () => this.generateUUID()
+                        }));
                         this.renderBoard();
                         await this.saveBoard();
                     }
