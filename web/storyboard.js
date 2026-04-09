@@ -1170,9 +1170,11 @@ class StoryboardWorkspace {
             if (!video) {
                 video = document.createElement("video");
                 video.controls = true;
+                video.autoplay = false;
                 video.preload = "metadata";
                 video.muted = true;
                 video.loop = true;
+                video.playsInline = true;
                 video.draggable = false;
                 wrapper.appendChild(video);
             }
@@ -1180,20 +1182,13 @@ class StoryboardWorkspace {
             if (video.getAttribute("data-src") !== src) {
                 video.src = src + `?t=${Date.now()}`;
                 video.setAttribute("data-src", src);
+                video.pause();
             }
 
-            let badge = el.querySelector(".video-type-badge");
-            if (!badge) {
-                badge = document.createElement("div");
-                badge.className = "video-type-badge";
-                badge.innerText = "VIDEO";
-                el.appendChild(badge);
-            }
-
-            let meta = el.querySelector(".image-meta");
+            let meta = el.querySelector(".video-meta");
             if (!meta) {
                 meta = document.createElement("div");
-                meta.className = "image-meta";
+                meta.className = "video-meta";
                 el.appendChild(meta);
             }
             meta.innerHTML = "";
