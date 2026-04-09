@@ -997,10 +997,19 @@ class StoryboardWorkspace {
             const span = document.createElement("span");
             span.innerText = c.toUpperCase();
             dot.appendChild(span);
+
+            // Prevent frame/item drag handlers from stealing this interaction.
+            dot.onmousedown = (e) => {
+                e.stopPropagation();
+            };
+            dot.onpointerdown = (e) => {
+                e.stopPropagation();
+            };
             
             dot.title = `Click to copy: ${c}`;
             dot.onclick = async (e) => {
                 e.stopPropagation();
+                e.preventDefault();
                 const text = c.toUpperCase();
                 
                 console.log("Color clicked:", text);
