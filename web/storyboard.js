@@ -1487,6 +1487,67 @@ class StoryboardWorkspace {
                 container.appendChild(pill);
             });
             
+        } else if (item.type === "palette") {
+            el.classList.add("palette-widget-item");
+            let container = el.querySelector(".palette-widget");
+            if (!container) {
+                container = document.createElement("div");
+                container.className = "palette-widget";
+                el.appendChild(container);
+            }
+            let linkBadge = el.querySelector(".palette-link-badge");
+            if (item.palette_source_id) {
+                if (!linkBadge) {
+                    linkBadge = document.createElement("div");
+                    linkBadge.className = "palette-link-badge";
+                    el.appendChild(linkBadge);
+                }
+                linkBadge.innerText = "🔗";
+                linkBadge.title = `Linked to ${item.palette_source_id}`;
+            } else if (linkBadge) {
+                linkBadge.remove();
+            }
+            const sourceItem = this.boardData.items.find(i => i.id === item.palette_source_id);
+            const palettePosition = sourceItem?.palette_position || "left";
+            container.classList.toggle("left-position", palettePosition === "left");
+            container.classList.toggle("bottom-position", palettePosition !== "left");
+            const colors = item.palette_data || [];
+
+            if (sourceItem) {
+                if (palettePosition === "left") {
+                    item.w = 170;
+                    item.h = Math.max(170, colors.length * 66);
+                } else {
+                    item.w = Math.max(170, colors.length * 66);
+                    item.h = 170;
+                }
+                const position = this.getPaletteWidgetPosition(sourceItem, item.w, item.h);
+                item.x = position.x;
+                item.y = position.y;
+                el.style.left = `${item.x}px`;
+                el.style.top = `${item.y}px`;
+                el.style.width = `${item.w}px`;
+                el.style.height = `${item.h}px`;
+            }
+
+            container.innerHTML = "";
+            colors.forEach(hex => {
+                const pill = document.createElement("div");
+                pill.className = "palette-color";
+                pill.style.backgroundColor = hex;
+                pill.style.color = this.getContrastColor(hex);
+                pill.innerText = hex.toUpperCase();
+                pill.title = `Click to copy: ${hex}`;
+                pill.onmousedown = (e) => e.stopPropagation();
+                pill.onclick = async (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const success = await this.copyToClipboard(hex.toUpperCase());
+                    if (success) this.showCopyFeedback(pill);
+                };
+                container.appendChild(pill);
+            });
+            
         } else if (item.type === "note") {
             el.classList.add("note-item");
             const bgColor = item.color || "#ffeb3b";
