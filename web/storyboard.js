@@ -147,6 +147,18 @@ class StoryboardWorkspace {
         this.minimapItems = this.minimap.querySelector(".storyboard-minimap-items");
         this.minimapViewport = this.minimap.querySelector(".storyboard-minimap-viewport");
         this.minimapView = null;
+
+        this.minimapControls = document.createElement("div");
+        this.minimapControls.className = "storyboard-minimap-controls";
+        this.minimapControls.innerHTML = `
+            <button id="storyboard-minimap-fit" title="Fit view to content">Fit</button>
+            <button id="storyboard-minimap-center" title="Center on content">Center</button>
+            <div class="storyboard-minimap-zoom">
+                <button id="storyboard-minimap-zoom-out" title="Zoom out">−</button>
+                <span id="storyboard-minimap-zoom-label">100%</span>
+                <button id="storyboard-minimap-zoom-in" title="Zoom in">+</button>
+            </div>
+        `;
         
         this.inspector = document.createElement("div");
         this.inspector.className = "storyboard-inspector";
@@ -163,6 +175,7 @@ class StoryboardWorkspace {
 
         this.canvasContainer.appendChild(this.canvas);
         this.canvasContainer.appendChild(this.minimap);
+        this.canvasContainer.appendChild(this.minimapControls);
         main.appendChild(this.canvasContainer);
         main.appendChild(this.inspector);
         main.appendChild(this.inspectorToggle);
@@ -188,6 +201,10 @@ class StoryboardWorkspace {
         document.body.appendChild(this.overlay);
 
         document.getElementById("storyboard-close").onclick = () => this.hide();
+        document.getElementById("storyboard-minimap-fit").onclick = () => this.fitViewToContent();
+        document.getElementById("storyboard-minimap-center").onclick = () => this.centerOnContent();
+        document.getElementById("storyboard-minimap-zoom-in").onclick = () => this.zoomAtCenter(1.15);
+        document.getElementById("storyboard-minimap-zoom-out").onclick = () => this.zoomAtCenter(1 / 1.15);
         
         this.boardSelector = document.getElementById("storyboard-selector");
         this.boardSelector.onchange = (e) => this.show(e.target.value, this.node);
@@ -424,6 +441,128 @@ class StoryboardWorkspace {
         this.renderBoard();
         this.saveBoard();
     }
+
+    hexToRgb(color) {
+        if (!color || typeof color !== "string") return null;
+        const value = color.trim();
+        if (!value.startsWith("#")) return null;
+        const hex = value.length === 4
+            ? `#${value[1]}${value[1]}${value[2]}${value[2]}${value[3]}${value[3]}`
+            : value;
+        if (hex.length !== 7) return null;
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return null;
+        return { r, g, b };
+    }
+
+    colorWithAlpha(color, alpha, fallback) {
+        const rgb = this.hexToRgb(color);
+        if (!rgb) return fallback;
+        return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+    }
+
+    getMinimapItemColors(item) {
+        if (item.type === "frame") {
+            const base = item.color || "#8b8f97";
+            return {
+                fill: this.colorWithAlpha(base, 0.35, "rgba(164, 164, 164, 0.35)"),
+                border: this.colorWithAlpha(base, 0.95, "rgba(225, 225, 225, 0.95)")
+            };
+        }
+        if (item.type === "note") {
+            const base = item.color || "#ffeb3b";
+            return {
+                fill: this.colorWithAlpha(base, 0.5, "rgba(255, 235, 59, 0.5)"),
+                border: this.colorWithAlpha(base, 0.95, "rgba(255, 241, 118, 0.95)")
+            };
+        }
+        if (item.type === "image") {
+            const base = (item.image_palette && item.image_palette[0]) || "#90caf9";
+            return {
+                fill: this.colorWithAlpha(base, 0.4, "rgba(33, 150, 243, 0.4)"),
+                border: this.colorWithAlpha(base, 0.95, "rgba(144, 202, 249, 0.95)")
+            };
+        }
+        if (item.type === "slot") {
+            return { fill: "rgba(156, 163, 175, 0.25)", border: "rgba(229, 231, 235, 0.9)" };
+        }
+        return { fill: "rgba(255, 255, 255, 0.2)", border: "rgba(255, 255, 255, 0.75)" };
+    }
+
+    getWorldBounds(padding = 80) {
+        const viewportWorld = {
+            x: -this.offset.x / this.scale,
+            y: -this.offset.y / this.scale,
+            w: this.canvasContainer.clientWidth / this.scale,
+            h: this.canvasContainer.clientHeight / this.scale
+        };
+        let minX = viewportWorld.x;
+        let minY = viewportWorld.y;
+        let maxX = viewportWorld.x + viewportWorld.w;
+        let maxY = viewportWorld.y + viewportWorld.h;
+        for (const item of this.boardData.items) {
+            minX = Math.min(minX, item.x);
+            minY = Math.min(minY, item.y);
+            maxX = Math.max(maxX, item.x + item.w);
+            maxY = Math.max(maxY, item.y + item.h);
+        }
+        return {
+            viewportWorld,
+            minX: minX - padding,
+            minY: minY - padding,
+            maxX: maxX + padding,
+            maxY: maxY + padding
+        };
+    }
+
+    centerOnWorldPoint(worldX, worldY) {
+        this.offset.x = this.canvasContainer.clientWidth * 0.5 - worldX * this.scale;
+        this.offset.y = this.canvasContainer.clientHeight * 0.5 - worldY * this.scale;
+        this.updateTransform();
+    }
+
+    zoomAtPoint(multiplier, pointX, pointY) {
+        const oldScale = this.scale;
+        const minScale = 0.15;
+        const maxScale = 5;
+        const nextScale = Math.max(minScale, Math.min(maxScale, this.scale * multiplier));
+        if (Math.abs(nextScale - oldScale) < 1e-6) return;
+        this.scale = nextScale;
+        this.offset.x = pointX - (pointX - this.offset.x) * (this.scale / oldScale);
+        this.offset.y = pointY - (pointY - this.offset.y) * (this.scale / oldScale);
+        this.updateTransform();
+    }
+
+    zoomAtCenter(multiplier) {
+        const cx = this.canvasContainer.clientWidth * 0.5;
+        const cy = this.canvasContainer.clientHeight * 0.5;
+        this.zoomAtPoint(multiplier, cx, cy);
+    }
+
+    fitViewToContent() {
+        if (!this.canvasContainer) return;
+        const { minX, minY, maxX, maxY } = this.getWorldBounds(80);
+        const worldW = Math.max(1, maxX - minX);
+        const worldH = Math.max(1, maxY - minY);
+        const scaleX = this.canvasContainer.clientWidth / worldW;
+        const scaleY = this.canvasContainer.clientHeight / worldH;
+        this.scale = Math.max(0.15, Math.min(5, Math.min(scaleX, scaleY)));
+        this.centerOnWorldPoint(minX + worldW * 0.5, minY + worldH * 0.5);
+    }
+
+    centerOnContent() {
+        if (!this.canvasContainer) return;
+        const { minX, minY, maxX, maxY } = this.getWorldBounds(0);
+        this.centerOnWorldPoint(minX + (maxX - minX) * 0.5, minY + (maxY - minY) * 0.5);
+    }
+
+    updateMinimapControls() {
+        const label = document.getElementById("storyboard-minimap-zoom-label");
+        if (label) label.textContent = `${Math.round(this.scale * 100)}%`;
+    }
+
     renderBoard() {
         // Track which items are current to remove old ones later
         const currentItemIds = new Set(this.boardData.items.map(i => i.id));
@@ -479,31 +618,7 @@ class StoryboardWorkspace {
         const minimapRect = this.minimap.getBoundingClientRect();
         const minimapWidth = Math.max(1, minimapRect.width);
         const minimapHeight = Math.max(1, minimapRect.height);
-        const padding = 80;
-
-        const viewportWorld = {
-            x: -this.offset.x / this.scale,
-            y: -this.offset.y / this.scale,
-            w: this.canvasContainer.clientWidth / this.scale,
-            h: this.canvasContainer.clientHeight / this.scale
-        };
-
-        let minX = viewportWorld.x;
-        let minY = viewportWorld.y;
-        let maxX = viewportWorld.x + viewportWorld.w;
-        let maxY = viewportWorld.y + viewportWorld.h;
-
-        for (const item of this.boardData.items) {
-            minX = Math.min(minX, item.x);
-            minY = Math.min(minY, item.y);
-            maxX = Math.max(maxX, item.x + item.w);
-            maxY = Math.max(maxY, item.y + item.h);
-        }
-
-        minX -= padding;
-        minY -= padding;
-        maxX += padding;
-        maxY += padding;
+        const { viewportWorld, minX, minY, maxX, maxY } = this.getWorldBounds(80);
 
         const worldW = Math.max(1, maxX - minX);
         const worldH = Math.max(1, maxY - minY);
@@ -519,7 +634,10 @@ class StoryboardWorkspace {
         this.minimapItems.innerHTML = "";
         for (const item of this.boardData.items) {
             const rect = document.createElement("div");
-            rect.className = `storyboard-minimap-item ${item.type}-item`;
+            rect.className = "storyboard-minimap-item";
+            const colors = this.getMinimapItemColors(item);
+            rect.style.backgroundColor = colors.fill;
+            rect.style.borderColor = colors.border;
             rect.style.left = `${offsetX + (item.x - minX) * mapScale}px`;
             rect.style.top = `${offsetY + (item.y - minY) * mapScale}px`;
             rect.style.width = `${Math.max(2, item.w * mapScale)}px`;
@@ -538,13 +656,11 @@ class StoryboardWorkspace {
         const rect = this.minimap.getBoundingClientRect();
         const localX = Math.max(0, Math.min(rect.width, clientX - rect.left));
         const localY = Math.max(0, Math.min(rect.height, clientY - rect.top));
+        if (!this.minimapView.mapScale) return;
 
         const worldX = this.minimapView.minX + (localX - this.minimapView.offsetX) / this.minimapView.mapScale;
         const worldY = this.minimapView.minY + (localY - this.minimapView.offsetY) / this.minimapView.mapScale;
-
-        this.offset.x = this.canvasContainer.clientWidth * 0.5 - worldX * this.scale;
-        this.offset.y = this.canvasContainer.clientHeight * 0.5 - worldY * this.scale;
-        this.updateTransform();
+        this.centerOnWorldPoint(worldX, worldY);
     }
 
     addItemInteractions(el, initialItem) {
@@ -2020,13 +2136,7 @@ class StoryboardWorkspace {
             const mouseX = e.clientX - rect.left;
             const mouseY = e.clientY - rect.top;
             
-            const oldScale = this.scale;
-            this.scale *= zoom;
-            
-            this.offset.x = mouseX - (mouseX - this.offset.x) * (this.scale / oldScale);
-            this.offset.y = mouseY - (mouseY - this.offset.y) * (this.scale / oldScale);
-            
-            this.updateTransform();
+            this.zoomAtPoint(zoom, mouseX, mouseY);
         };
 
         // Drag and drop support
@@ -2221,5 +2331,6 @@ class StoryboardWorkspace {
     updateTransform() {
         this.canvas.style.transform = `translate(${this.offset.x}px, ${this.offset.y}px) scale(${this.scale})`;
         this.updateMinimap();
+        this.updateMinimapControls();
     }
 }

@@ -256,7 +256,7 @@
 .storyboard-minimap {
     position: absolute;
     right: 14px;
-    bottom: 14px;
+    bottom: 64px;
     width: 190px;
     height: 132px;
     border-radius: 10px;
@@ -266,6 +266,58 @@
     z-index: 22;
     overflow: hidden;
     cursor: crosshair;
+}
+
+.storyboard-minimap-controls {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    width: 190px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(8, 10, 16, 0.9);
+    backdrop-filter: blur(2px);
+    z-index: 22;
+}
+
+.storyboard-minimap-controls button {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    font-size: 11px;
+    padding: 5px 8px;
+    cursor: pointer;
+}
+
+.storyboard-minimap-controls button:hover {
+    background: rgba(255, 255, 255, 0.16);
+}
+
+.storyboard-minimap-zoom {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+#storyboard-minimap-zoom-label {
+    min-width: 44px;
+    text-align: center;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.storyboard-minimap-zoom button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    line-height: 1;
+    font-size: 15px;
 }
 
 .storyboard-minimap-items {
@@ -278,26 +330,6 @@
     border-radius: 2px;
     border: 1px solid rgba(255, 255, 255, 0.5);
     background: rgba(255, 255, 255, 0.18);
-}
-
-.storyboard-minimap-item.frame-item {
-    background: rgba(76, 175, 80, 0.2);
-    border-color: rgba(129, 199, 132, 0.8);
-}
-
-.storyboard-minimap-item.note-item {
-    background: rgba(255, 235, 59, 0.4);
-    border-color: rgba(255, 241, 118, 0.95);
-}
-
-.storyboard-minimap-item.image-item {
-    background: rgba(33, 150, 243, 0.28);
-    border-color: rgba(144, 202, 249, 0.95);
-}
-
-.storyboard-minimap-item.slot-item {
-    background: rgba(156, 163, 175, 0.2);
-    border-color: rgba(229, 231, 235, 0.9);
 }
 
 .storyboard-minimap-viewport {
