@@ -47,7 +47,9 @@ class StoryboardWorkspace {
     }
 
     constructor() {
-        this.createWindow();
+        this.themeMode = this.normalizeThemeMode(localStorage.getItem("storyboard.themeMode"));
+        this.systemThemeQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+        this.fontOptions = this.getDefaultFontOptions();
         this.boardId = "default";
         this.node = null;
         this.boardData = null;
@@ -60,8 +62,8 @@ class StoryboardWorkspace {
         this.internalClipboard = [];
         this.needsReload = false;
         this.inspectorOpen = false;
-        this.themeMode = localStorage.getItem("storyboard.themeMode") || "system";
-        this.systemThemeQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+        this.createWindow();
+        this.refreshFontOptions();
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
@@ -460,6 +462,11 @@ class StoryboardWorkspace {
         return this.systemThemeQuery?.matches ? "dark" : "light";
     }
 
+    normalizeThemeMode(mode) {
+        const valid = new Set(["system", "light", "dark"]);
+        return valid.has(mode) ? mode : "system";
+    }
+
     applyThemeMode() {
         if (!this.window) return;
         const resolved = this.getResolvedTheme();
@@ -468,7 +475,8 @@ class StoryboardWorkspace {
         if (this.themeToggleButton) {
             const glyph = this.themeMode === "system" ? "◐" : (this.themeMode === "light" ? "☼" : "☾");
             this.themeToggleButton.textContent = glyph;
-            this.themeToggleButton.title = `Theme: ${this.themeMode[0].toUpperCase()}${this.themeMode.slice(1)}`;
+            const label = this.themeMode ? `${this.themeMode.charAt(0).toUpperCase()}${this.themeMode.slice(1)}` : "System";
+            this.themeToggleButton.title = `Theme: ${label}`;
         }
     }
 
@@ -478,6 +486,90 @@ class StoryboardWorkspace {
         this.themeMode = order[(idx + 1) % order.length];
         localStorage.setItem("storyboard.themeMode", this.themeMode);
         this.applyThemeMode();
+    }
+
+    getDefaultFontOptions() {
+        return [
+            { label: "System Sans", value: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" },
+            { label: "System Serif", value: "ui-serif, Georgia, Cambria, Times New Roman, serif" },
+            { label: "Monospace", value: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
+            { label: "Arial", value: "Arial, Helvetica, sans-serif" },
+            { label: "Verdana", value: "Verdana, Geneva, sans-serif" },
+            { label: "Tahoma", value: "Tahoma, Geneva, sans-serif" },
+            { label: "Trebuchet MS", value: "'Trebuchet MS', Helvetica, sans-serif" },
+            { label: "Georgia", value: "Georgia, serif" },
+            { label: "Times New Roman", value: "'Times New Roman', Times, serif" },
+            { label: "Courier New", value: "'Courier New', Courier, monospace" }
+        ];
+    }
+
+    async refreshFontOptions() {
+        const defaults = this.getDefaultFontOptions();
+        const dedupe = new Map(defaults.map((f) => [f.value, f]));
+        try {
+            if (window.queryLocalFonts) {
+                const localFonts = await window.queryLocalFonts();
+                localFonts
+                    .map(f => (f.family || "").trim())
+                    .filter(Boolean)
+                    .sort((a, b) => a.localeCompare(b))
+                    .forEach((family) => {
+                        if (!dedupe.has(family)) dedupe.set(family, { label: family, value: family });
+                    });
+            } else {
+                const candidates = [
+                    "Inter", "Roboto", "Open Sans", "Noto Sans", "Noto Serif", "Source Sans Pro", "Source Serif Pro",
+                    "Lato", "Poppins", "Montserrat", "Ubuntu", "PT Sans", "PT Serif", "Merriweather", "Fira Sans",
+                    "Fira Mono", "JetBrains Mono", "SF Pro Text", "SF Pro Display", "Avenir", "Avenir Next",
+                    "Helvetica Neue", "Lucida Grande", "Segoe UI", "Calibri", "Cambria", "Candara", "Corbel",
+                    "Consolas", "Constantia", "Franklin Gothic Medium", "Gill Sans", "Optima", "Palatino",
+                    "Book Antiqua", "Baskerville", "Didot", "American Typewriter", "Copperplate", "Comic Sans MS",
+                    "Impact", "Arial Black", "MS Gothic", "Yu Gothic", "Meiryo", "Hiragino Sans", "Hiragino Mincho ProN",
+                    "PingFang SC", "PingFang TC", "SimHei", "SimSun", "Microsoft YaHei", "Microsoft JhengHei",
+                    "Nanum Gothic", "Nanum Myeongjo", "Pretendard", "Apple SD Gothic Neo", "Liberation Sans",
+                    "Liberation Serif", "Liberation Mono", "DejaVu Sans", "DejaVu Serif", "DejaVu Sans Mono",
+                    "Noto Color Emoji", "Segoe UI Emoji"
+                ];
+                const detected = this.detectInstalledFonts(candidates);
+                detected.forEach((family) => {
+                    if (!dedupe.has(family)) dedupe.set(family, { label: family, value: family });
+                });
+            }
+        } catch (err) {
+            console.warn("Font detection fallback in use:", err);
+        }
+        this.fontOptions = Array.from(dedupe.values());
+        if (this.overlay?.style?.display === "flex") {
+            this.renderInspector();
+        }
+    }
+
+    detectInstalledFonts(candidates) {
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        if (!context) return [];
+        const testText = "mmmmmmmmmmlliWWW@@@";
+        const testSize = "72px";
+        const fallbacks = ["monospace", "sans-serif", "serif"];
+        const fallbackWidths = {};
+        fallbacks.forEach((fallback) => {
+            context.font = `${testSize} ${fallback}`;
+            fallbackWidths[fallback] = context.measureText(testText).width;
+        });
+        const detected = [];
+        for (const family of candidates) {
+            let isAvailable = false;
+            for (const fallback of fallbacks) {
+                context.font = `${testSize} '${family}', ${fallback}`;
+                const width = context.measureText(testText).width;
+                if (Math.abs(width - fallbackWidths[fallback]) > 0.1) {
+                    isAvailable = true;
+                    break;
+                }
+            }
+            if (isAvailable) detected.push(family);
+        }
+        return detected;
     }
 
     hexToRgb(color) {
@@ -1757,18 +1849,7 @@ class StoryboardWorkspace {
             "#4CAF50", "#2196F3", "#f44336", "#ffeb3b",
             "#9c27b0", "#ff9800", "#795548", "#607d8b"
         ];
-        const fontOptions = [
-            { label: "System Sans", value: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" },
-            { label: "System Serif", value: "ui-serif, Georgia, Cambria, Times New Roman, serif" },
-            { label: "Monospace", value: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
-            { label: "Arial", value: "Arial, Helvetica, sans-serif" },
-            { label: "Verdana", value: "Verdana, Geneva, sans-serif" },
-            { label: "Tahoma", value: "Tahoma, Geneva, sans-serif" },
-            { label: "Trebuchet MS", value: "'Trebuchet MS', Helvetica, sans-serif" },
-            { label: "Georgia", value: "Georgia, serif" },
-            { label: "Times New Roman", value: "'Times New Roman', Times, serif" },
-            { label: "Courier New", value: "'Courier New', Courier, monospace" }
-        ];
+        const fontOptions = this.fontOptions || this.getDefaultFontOptions();
 
         const createFontSelect = (currentValue) => {
             const normalizedCurrent = (currentValue || "").trim();
