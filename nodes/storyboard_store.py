@@ -1,7 +1,7 @@
 import os
 import json
 import uuid
-from PIL import Image
+from PIL import Image, ImageDraw
 import numpy as np
 import torch
 

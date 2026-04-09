@@ -1037,6 +1037,24 @@ class StoryboardWorkspace {
             el.appendChild(paletteBar);
         }
 
+        if (item.palette_hidden) {
+            paletteBar.style.display = "none";
+            return;
+        }
+
+        const framePalettePosition = item.palette_position || "bottom";
+        if (framePalettePosition === "left") {
+            paletteBar.style.left = "-14px";
+            paletteBar.style.bottom = "50%";
+            paletteBar.style.transform = "translate(-100%, 50%)";
+            paletteBar.style.flexDirection = "column";
+        } else {
+            paletteBar.style.left = "50%";
+            paletteBar.style.bottom = "-170px";
+            paletteBar.style.transform = "translateX(-50%)";
+            paletteBar.style.flexDirection = "row";
+        }
+
         // Use a small timeout to ensure boardData is updated if this was called from a move
         const imagesInFrame = this.boardData.items
             .filter(it => it.type === "image" && it.image_ref &&
@@ -1136,6 +1154,20 @@ class StoryboardWorkspace {
         const originalTransform = el.style.transform;
         el.style.transform = "scale(1.2)";
         setTimeout(() => el.style.transform = originalTransform, 200);
+    }
+
+    getPaletteWidgetPosition(sourceItem, paletteWidth, paletteHeight) {
+        const position = sourceItem.palette_position || "left";
+        if (position === "bottom") {
+            return {
+                x: sourceItem.x + (sourceItem.w - paletteWidth) / 2,
+                y: sourceItem.y + sourceItem.h + 20
+            };
+        }
+        return {
+            x: sourceItem.x - paletteWidth - 20,
+            y: sourceItem.y + (sourceItem.h - paletteHeight) / 2
+        };
     }
 
     autoArrangeFrame(frame) {
@@ -1342,6 +1374,7 @@ class StoryboardWorkspace {
             `;
             if (item.type === "image") {
                 const imagePaletteColors = item.palette_colors || 8;
+                const imagePalettePosition = item.palette_position || "left";
                 fields += `
                     <div class="inspector-field">
                         <label>Image Palette Colors</label>
@@ -1352,6 +1385,13 @@ class StoryboardWorkspace {
                             <option value="16" ${imagePaletteColors === 16 ? "selected" : ""}>16</option>
                         </select>
                     </div>
+                    <div class="inspector-field">
+                        <label>Image Palette Position</label>
+                        <select id="inspector-image-palette-position">
+                            <option value="left" ${imagePalettePosition === "left" ? "selected" : ""}>Left Center</option>
+                            <option value="bottom" ${imagePalettePosition === "bottom" ? "selected" : ""}>Bottom Center</option>
+                        </select>
+                    </div>
                     <div class="inspector-actions">
                         <button id="action-generate-image-palette">Show Palette</button>
                     </div>
@@ -1359,6 +1399,7 @@ class StoryboardWorkspace {
             }
         } else if (item.type === "frame") {
             const framePaletteColors = item.palette_colors || 8;
+            const framePalettePosition = item.palette_position || "bottom";
             fields += `
                 <div class="inspector-field">
                     <label>Label</label>
@@ -1371,6 +1412,13 @@ class StoryboardWorkspace {
                         <option value="8" ${framePaletteColors === 8 ? "selected" : ""}>8</option>
                         <option value="12" ${framePaletteColors === 12 ? "selected" : ""}>12</option>
                         <option value="16" ${framePaletteColors === 16 ? "selected" : ""}>16</option>
+                    </select>
+                </div>
+                <div class="inspector-field">
+                    <label>Frame Palette Position</label>
+                    <select id="inspector-frame-palette-position">
+                        <option value="bottom" ${framePalettePosition === "bottom" ? "selected" : ""}>Bottom Center</option>
+                        <option value="left" ${framePalettePosition === "left" ? "selected" : ""}>Left Center</option>
                     </select>
                 </div>
                 ${createColorPicker(item.color || "#4CAF50")}
@@ -1417,6 +1465,7 @@ class StoryboardWorkspace {
                 <button id="action-front">Bring to Front</button>
                 <button id="action-back">Send to Back</button>
                 <button id="action-pin-toggle">${item.pinned ? "Unpin Item" : "Pin Item"}</button>
+                ${item.type === "frame" ? `<button id="action-toggle-palette">${item.palette_hidden ? "Show Palette" : "Hide Palette"}</button>` : ""}
                 ${item.type === "frame" ? '<button id="action-auto-layout">Auto Arrange In Frame</button>' : ""}
                 <button id="action-delete" class="danger">Delete Item</button>
             </div>
@@ -1477,6 +1526,15 @@ class StoryboardWorkspace {
             };
         }
 
+        const togglePaletteButton = document.getElementById("action-toggle-palette");
+        if (togglePaletteButton) {
+            togglePaletteButton.onclick = () => {
+                item.palette_hidden = !item.palette_hidden;
+                this.renderBoard();
+                this.saveBoard();
+            };
+        }
+
         const autoLayoutButton = document.getElementById("action-auto-layout");
         if (autoLayoutButton) {
             autoLayoutButton.onclick = () => {
@@ -1507,38 +1565,63 @@ class StoryboardWorkspace {
                         this.saveBoard();
                     };
                 }
+                const imagePalettePositionSelect = document.getElementById("inspector-image-palette-position");
+                if (imagePalettePositionSelect) {
+                    imagePalettePositionSelect.onchange = (e) => {
+                        item.palette_position = e.target.value;
+                        const linkedPalette = this.boardData.items.find(i => i.type === "palette" && i.palette_source_id === item.id);
+                        if (linkedPalette) {
+                            const position = this.getPaletteWidgetPosition(item, linkedPalette.w, linkedPalette.h);
+                            linkedPalette.x = position.x;
+                            linkedPalette.y = position.y;
+                        }
+                        this.renderBoard();
+                        this.saveBoard();
+                    };
+                }
 
                 const generatePaletteBtn = document.getElementById("action-generate-image-palette");
                 if (generatePaletteBtn) {
                     generatePaletteBtn.onclick = async () => {
-                        const paletteCount = item.palette_colors || 8;
-                        const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/image/${item.id}?num_colors=${paletteCount}`);
-                        const result = await response.json();
-                        if (result.colors && result.colors.length) {
-                            const pillWidth = 88;
-                            const pillGap = 10;
-                            const paletteWidth = Math.max(240, result.colors.length * (pillWidth + pillGap) + 20);
-                            const existingPalette = this.boardData.items.find(i => i.type === "palette" && i.palette_source_id === item.id);
-                            const paletteItem = existingPalette || {
-                                id: this.generateUUID(),
-                                type: "palette",
-                                tags: ["palette"],
-                            };
-
-                            paletteItem.x = item.x - paletteWidth - 20;
-                            paletteItem.y = item.y;
-                            paletteItem.w = paletteWidth;
-                            paletteItem.h = 72;
-                            paletteItem.label = `${item.label || "Image"} Palette`;
-                            paletteItem.palette_data = result.colors;
-                            paletteItem.palette_source_id = item.id;
-
-                            if (!existingPalette) {
-                                this.boardData.items.push(paletteItem);
+                        try {
+                            const paletteCount = item.palette_colors || 8;
+                            const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/image/${item.id}?num_colors=${paletteCount}`);
+                            if (!response.ok) {
+                                throw new Error(`HTTP ${response.status}`);
                             }
-                            this.boardData.selection = [paletteItem.id];
-                            this.renderBoard();
-                            this.saveBoard();
+                            const result = await response.json();
+                            if (result.colors && result.colors.length) {
+                                const pillWidth = 88;
+                                const pillGap = 10;
+                                const paletteWidth = Math.max(240, result.colors.length * (pillWidth + pillGap) + 20);
+                                const existingPalette = this.boardData.items.find(i => i.type === "palette" && i.palette_source_id === item.id);
+                                const paletteItem = existingPalette || {
+                                    id: this.generateUUID(),
+                                    type: "palette",
+                                    tags: ["palette"],
+                                };
+
+                                const position = this.getPaletteWidgetPosition(item, paletteWidth, 72);
+                                paletteItem.x = position.x;
+                                paletteItem.y = position.y;
+                                paletteItem.w = paletteWidth;
+                                paletteItem.h = 72;
+                                paletteItem.label = `${item.label || "Image"} Palette`;
+                                paletteItem.palette_data = result.colors;
+                                paletteItem.palette_source_id = item.id;
+
+                                if (!existingPalette) {
+                                    this.boardData.items.push(paletteItem);
+                                }
+                                this.boardData.selection = [paletteItem.id];
+                                this.renderBoard();
+                                this.saveBoard();
+                            } else {
+                                alert("No palette colors found for this image.");
+                            }
+                        } catch (err) {
+                            console.error("Show Palette failed:", err);
+                            alert("Show Palette failed. Check server logs and retry.");
                         }
                     };
                 }
@@ -1554,6 +1637,14 @@ class StoryboardWorkspace {
                 framePaletteSelect.onchange = () => {
                     item.palette_colors = parseInt(framePaletteSelect.value, 10) || 8;
                     this.paletteCache.delete(item.id);
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
+            const framePalettePositionSelect = document.getElementById("inspector-frame-palette-position");
+            if (framePalettePositionSelect) {
+                framePalettePositionSelect.onchange = () => {
+                    item.palette_position = framePalettePositionSelect.value;
                     this.renderBoard();
                     this.saveBoard();
                 };
