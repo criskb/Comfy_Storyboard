@@ -204,6 +204,12 @@ class StoryboardWorkspace {
         this.overlay.appendChild(this.window);
         document.body.appendChild(this.overlay);
 
+        this.slotFileInput = document.createElement("input");
+        this.slotFileInput.type = "file";
+        this.slotFileInput.accept = "image/*,video/*";
+        this.slotFileInput.style.display = "none";
+        document.body.appendChild(this.slotFileInput);
+
         document.getElementById("storyboard-close").onclick = () => this.hide();
         this.themeToggleButton = document.getElementById("storyboard-theme-toggle");
         if (this.themeToggleButton) {
@@ -316,6 +322,85 @@ class StoryboardWorkspace {
 
         this.setupInteractions();
         this.setInspectorOpen(false);
+    }
+
+    promptImportForSlot(itemId) {
+        const input = this.slotFileInput;
+        if (!input) return;
+        input.value = "";
+        input.onchange = async () => {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            const item = this.boardData.items.find(i => i.id === itemId);
+            if (!item || item.type !== "slot" || item.pinned) return;
+            try {
+                await this.importFileIntoSlot(item, file);
+            } catch (err) {
+                console.error("Slot import failed:", err);
+                alert("Failed to import file into slot.");
+            }
+        };
+        input.click();
+    }
+
+    async importFileIntoSlot(item, file) {
+        const formData = new FormData();
+        const isImage = file.type.startsWith("image/");
+        if (isImage) formData.append("image", file);
+        else formData.append("asset", file);
+
+        const response = await fetch(`/mkr/storyboard/${this.boardId}/upload`, {
+            method: "POST",
+            body: formData
+        });
+        if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
+        const result = await response.json();
+        if (!result.filename) throw new Error("Upload response missing filename");
+
+        if (isImage) {
+            const sourceW = Number(result.width) || item.w || 512;
+            const sourceH = Number(result.height) || item.h || 512;
+            const aspect = sourceW / Math.max(1, sourceH);
+            const currentW = Math.max(50, Number(item.w) || 512);
+            item.type = "image";
+            item.image_ref = result.filename;
+            item.image_width = sourceW;
+            item.image_height = sourceH;
+            item.aspect = aspect;
+            item.h = Math.max(50, Math.round(currentW / aspect));
+            item.w = currentW;
+            item.label = item.label || file.name || "Imported Image";
+            delete item.video_ref;
+        } else {
+            const videoSize = await new Promise((resolve) => {
+                const probe = document.createElement("video");
+                const objectUrl = URL.createObjectURL(file);
+                probe.preload = "metadata";
+                probe.onloadedmetadata = () => {
+                    URL.revokeObjectURL(objectUrl);
+                    resolve({ w: probe.videoWidth || 640, h: probe.videoHeight || 360 });
+                };
+                probe.onerror = () => {
+                    URL.revokeObjectURL(objectUrl);
+                    resolve({ w: 640, h: 360 });
+                };
+                probe.src = objectUrl;
+            });
+            const aspect = videoSize.w / Math.max(1, videoSize.h);
+            const currentW = Math.max(50, Number(item.w) || 512);
+            item.type = "video";
+            item.video_ref = result.filename;
+            item.image_width = videoSize.w;
+            item.image_height = videoSize.h;
+            item.aspect = aspect;
+            item.h = Math.max(50, Math.round(currentW / aspect));
+            item.w = currentW;
+            item.label = item.label || file.name || "Imported Video";
+            delete item.image_ref;
+            delete item.crop;
+        }
+        this.renderBoard();
+        await this.saveBoard();
     }
 
     setInspectorOpen(open) {
@@ -1335,6 +1420,72 @@ class StoryboardWorkspace {
                 el.appendChild(label);
             }
             label.innerText = item.label || "Empty Slot";
+            label.title = "Click to import image or video";
+            label.onclick = (e) => {
+                e.stopPropagation();
+                this.promptImportForSlot(item.id);
+            };
+            
+        } else if (item.type === "palette") {
+            el.classList.add("palette-widget-item");
+            let container = el.querySelector(".palette-widget");
+            if (!container) {
+                container = document.createElement("div");
+                container.className = "palette-widget";
+                el.appendChild(container);
+            }
+            let linkBadge = el.querySelector(".palette-link-badge");
+            if (item.palette_source_id) {
+                if (!linkBadge) {
+                    linkBadge = document.createElement("div");
+                    linkBadge.className = "palette-link-badge";
+                    el.appendChild(linkBadge);
+                }
+                linkBadge.innerText = "🔗";
+                linkBadge.title = `Linked to ${item.palette_source_id}`;
+            } else if (linkBadge) {
+                linkBadge.remove();
+            }
+            const sourceItem = this.boardData.items.find(i => i.id === item.palette_source_id);
+            const palettePosition = sourceItem?.palette_position || "left";
+            container.classList.toggle("left-position", palettePosition === "left");
+            container.classList.toggle("bottom-position", palettePosition !== "left");
+            const colors = item.palette_data || [];
+
+            if (sourceItem) {
+                if (palettePosition === "left") {
+                    item.w = 170;
+                    item.h = Math.max(170, colors.length * 66);
+                } else {
+                    item.w = Math.max(170, colors.length * 66);
+                    item.h = 170;
+                }
+                const position = this.getPaletteWidgetPosition(sourceItem, item.w, item.h);
+                item.x = position.x;
+                item.y = position.y;
+                el.style.left = `${item.x}px`;
+                el.style.top = `${item.y}px`;
+                el.style.width = `${item.w}px`;
+                el.style.height = `${item.h}px`;
+            }
+
+            container.innerHTML = "";
+            colors.forEach(hex => {
+                const pill = document.createElement("div");
+                pill.className = "palette-color";
+                pill.style.backgroundColor = hex;
+                pill.style.color = this.getContrastColor(hex);
+                pill.innerText = hex.toUpperCase();
+                pill.title = `Click to copy: ${hex}`;
+                pill.onmousedown = (e) => e.stopPropagation();
+                pill.onclick = async (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const success = await this.copyToClipboard(hex.toUpperCase());
+                    if (success) this.showCopyFeedback(pill);
+                };
+                container.appendChild(pill);
+            });
             
         } else if (item.type === "palette") {
             el.classList.add("palette-widget-item");
