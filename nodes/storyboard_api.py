@@ -102,12 +102,24 @@ class StoryboardAPI:
             board_id = request.match_info["board_id"]
             post = await request.post()
             image = post.get("image")
+            asset = post.get("asset")
             
             if image:
                 pil_image = Image.open(image.file)
                 width, height = pil_image.size
                 filename = store.add_asset(board_id, pil_image)
-                return web.json_response({"filename": filename, "width": width, "height": height})
+                return web.json_response({"filename": filename, "width": width, "height": height, "kind": "image"})
+            if asset and getattr(asset, "file", None):
+                content_type = (getattr(asset, "content_type", "") or "").lower()
+                if content_type.startswith("image/"):
+                    pil_image = Image.open(asset.file)
+                    width, height = pil_image.size
+                    filename = store.add_asset(board_id, pil_image)
+                    return web.json_response({"filename": filename, "width": width, "height": height, "kind": "image"})
+                if content_type.startswith("video/"):
+                    ext = os.path.splitext(getattr(asset, "filename", "") or "")[1].lower() or ".mp4"
+                    filename = store.add_video_asset(board_id, asset.file.name, filename=f"{uuid.uuid4()}{ext}")
+                    return web.json_response({"filename": filename, "kind": "video"})
             
             return web.Response(status=400)
 

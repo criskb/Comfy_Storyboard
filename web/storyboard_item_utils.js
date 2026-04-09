@@ -53,3 +53,32 @@ export function createImageItem({
         ...extra,
     };
 }
+
+export function createVideoItem({
+    x,
+    y,
+    videoRef,
+    label = "Video",
+    videoWidth = 640,
+    videoHeight = 360,
+    generateId,
+    maxSize = 512,
+    minSize = 50,
+    extra = {}
+}) {
+    const dims = getDisplayDimensions(videoWidth, videoHeight, maxSize, minSize);
+    return {
+        id: generateId(),
+        type: "video",
+        x,
+        y,
+        w: dims.w,
+        h: dims.h,
+        video_ref: videoRef,
+        image_width: dims.imageWidth,
+        image_height: dims.imageHeight,
+        aspect: dims.aspect,
+        label,
+        ...extra,
+    };
+}

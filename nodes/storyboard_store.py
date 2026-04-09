@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import shutil
 from PIL import Image, ImageDraw
 import numpy as np
 import torch
@@ -83,6 +84,18 @@ class StoryboardStore:
         elif isinstance(image, Image.Image):
             image.save(full_path)
         
+        return filename
+
+    def add_video_asset(self, board_id, source_path, filename=None):
+        assets_path = self._get_assets_path(board_id)
+        if not os.path.exists(assets_path):
+            os.makedirs(assets_path)
+
+        ext = os.path.splitext(source_path)[1].lower() or ".mp4"
+        if filename is None:
+            filename = f"{uuid.uuid4()}{ext}"
+        full_path = os.path.join(assets_path, filename)
+        shutil.copy2(source_path, full_path)
         return filename
 
     def list_boards(self):
@@ -178,6 +191,25 @@ class StoryboardStore:
                         canvas.alpha_composite(temp_canvas, (rel_x, rel_y))
                     except Exception as e:
                         print(f"Error drawing image in flatten: {e}")
+            elif item["type"] == "video" and item.get("video_ref"):
+                mask = Image.new("L", (rel_w, rel_h), 0)
+                mask_draw = ImageDraw.Draw(mask)
+                mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=int(12 * scale), fill=255)
+                video_img = Image.new("RGBA", (rel_w, rel_h), (36, 36, 40, 255))
+                canvas.paste(video_img, (rel_x, rel_y), mask)
+                video_draw = ImageDraw.Draw(canvas)
+                icon_size = max(10, int(min(rel_w, rel_h) * 0.22))
+                cx = rel_x + rel_w // 2
+                cy = rel_y + rel_h // 2
+                triangle = [
+                    (cx - icon_size // 2, cy - icon_size),
+                    (cx - icon_size // 2, cy + icon_size),
+                    (cx + icon_size, cy),
+                ]
+                video_draw.polygon(triangle, fill=(255, 255, 255, 220))
+                label = item.get("label", "Video")
+                if label:
+                    video_draw.text((cx, rel_y + rel_h - int(16 * scale)), label, fill=(235, 235, 235, 255), anchor="ms")
             elif item["type"] == "note":
                 color = item.get("color", "#ffeb3b")
                 if color.startswith("#"):

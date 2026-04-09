@@ -517,6 +517,44 @@
     display: block;
 }
 
+.storyboard-item.video-item {
+    border-radius: 12px;
+    overflow: visible;
+}
+
+.storyboard-item.video-item .video-wrapper {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+    border-radius: 12px;
+    background: #111827;
+}
+
+.storyboard-item.video-item video {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+}
+
+.video-type-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 8;
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: #f3e8ff;
+    background: rgba(88, 28, 135, 0.86);
+    border: 1px solid rgba(196, 181, 253, 0.6);
+    border-radius: 999px;
+    padding: 4px 7px;
+    pointer-events: none;
+}
+
 .image-meta {
     position: absolute;
     left: 8px;

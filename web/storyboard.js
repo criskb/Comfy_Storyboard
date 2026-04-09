@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { createImageItem } from "./storyboard_item_utils.js";
+import { createImageItem, createVideoItem } from "./storyboard_item_utils.js";
 import { copyTextToClipboard } from "./storyboard_clipboard.js";
 
 // Load CSS
@@ -485,6 +485,9 @@ class StoryboardWorkspace {
                 border: this.colorWithAlpha(base, 0.95, "rgba(144, 202, 249, 0.95)")
             };
         }
+        if (item.type === "video") {
+            return { fill: "rgba(147, 51, 234, 0.35)", border: "rgba(216, 180, 254, 0.9)" };
+        }
         if (item.type === "slot") {
             return { fill: "rgba(156, 163, 175, 0.25)", border: "rgba(229, 231, 235, 0.9)" };
         }
@@ -736,7 +739,7 @@ class StoryboardWorkspace {
                 const dh = (moveEvent.clientY - startY) / this.scale;
                 
                 // Force uniform scaling for images and slots
-                if (item.type === "image" || item.type === "slot" || moveEvent.shiftKey) {
+                if (item.type === "image" || item.type === "video" || item.type === "slot" || moveEvent.shiftKey) {
                     const ratio = startW / startH;
                     if (Math.abs(dw) > Math.abs(dh)) {
                         item.w = Math.max(50, startW + dw);
@@ -1057,6 +1060,7 @@ class StoryboardWorkspace {
     }
 
     updateItemContent(el, item, isNew) {
+        el.classList.remove("image-item", "video-item", "slot-item", "palette-widget-item", "note-item", "frame-item");
         // Reference Pill
         let pill = el.querySelector(".storyboard-ref-pill");
         if (item.ref_id) {
@@ -1153,6 +1157,59 @@ class StoryboardWorkspace {
             });
             meta.style.display = meta.children.length > 0 ? "flex" : "none";
             this.updateImagePalette(el, item);
+        } else if (item.type === "video") {
+            el.classList.add("video-item");
+            let wrapper = el.querySelector(".video-wrapper");
+            if (!wrapper) {
+                wrapper = document.createElement("div");
+                wrapper.className = "video-wrapper";
+                el.appendChild(wrapper);
+            }
+
+            let video = wrapper.querySelector("video");
+            if (!video) {
+                video = document.createElement("video");
+                video.controls = true;
+                video.preload = "metadata";
+                video.muted = true;
+                video.loop = true;
+                video.draggable = false;
+                wrapper.appendChild(video);
+            }
+            const src = `/mkr/storyboard/asset/${this.boardId}/${item.video_ref}`;
+            if (video.getAttribute("data-src") !== src) {
+                video.src = src + `?t=${Date.now()}`;
+                video.setAttribute("data-src", src);
+            }
+
+            let badge = el.querySelector(".video-type-badge");
+            if (!badge) {
+                badge = document.createElement("div");
+                badge.className = "video-type-badge";
+                badge.innerText = "VIDEO";
+                el.appendChild(badge);
+            }
+
+            let meta = el.querySelector(".image-meta");
+            if (!meta) {
+                meta = document.createElement("div");
+                meta.className = "image-meta";
+                el.appendChild(meta);
+            }
+            meta.innerHTML = "";
+            if (item.label) {
+                const labelChip = document.createElement("div");
+                labelChip.className = "image-chip image-chip-label";
+                labelChip.innerText = item.label;
+                meta.appendChild(labelChip);
+            }
+            (item.tags || []).forEach(tag => {
+                const tagChip = document.createElement("div");
+                tagChip.className = "image-chip image-chip-tag";
+                tagChip.innerText = `#${tag}`;
+                meta.appendChild(tagChip);
+            });
+            meta.style.display = meta.children.length > 0 ? "flex" : "none";
             
         } else if (item.type === "slot") {
             el.classList.add("slot-item");
@@ -1713,7 +1770,7 @@ class StoryboardWorkspace {
             return html;
         };
 
-        if (item.type === "image" || item.type === "slot" || item.type === "palette") {
+        if (item.type === "image" || item.type === "video" || item.type === "slot" || item.type === "palette") {
             fields += `
                 <div class="inspector-field">
                     <label>Label</label>
@@ -1841,6 +1898,14 @@ class StoryboardWorkspace {
                 } catch (err) {
                     console.error("Failed to copy image: ", err);
                 }
+            } else if (item.type === "video") {
+                try {
+                    const videoUrl = `${window.location.origin}/mkr/storyboard/asset/${this.boardId}/${item.video_ref}`;
+                    await navigator.clipboard.writeText(videoUrl);
+                    alert("Video URL copied to clipboard!");
+                } catch (err) {
+                    console.error("Failed to copy video URL: ", err);
+                }
             } else if (item.type === "note") {
                 try {
                     await navigator.clipboard.writeText(item.content || "");
@@ -1938,7 +2003,7 @@ class StoryboardWorkspace {
             };
         }
 
-        if (item.type === "image" || item.type === "slot" || item.type === "palette") {
+        if (item.type === "image" || item.type === "video" || item.type === "slot" || item.type === "palette") {
             document.getElementById("inspector-label").onchange = (e) => {
                 item.label = e.target.value;
                 this.saveBoard();
@@ -2206,6 +2271,43 @@ class StoryboardWorkspace {
                         this.renderBoard();
                         await this.saveBoard();
                     }
+                } else if (file.type.startsWith("video/")) {
+                    const formData = new FormData();
+                    formData.append("asset", file);
+
+                    const response = await fetch(`/mkr/storyboard/${this.boardId}/upload`, {
+                        method: "POST",
+                        body: formData
+                    });
+                    const result = await response.json();
+                    if (result.filename) {
+                        const videoSize = await new Promise((resolve) => {
+                            const probe = document.createElement("video");
+                            const objectUrl = URL.createObjectURL(file);
+                            probe.preload = "metadata";
+                            probe.onloadedmetadata = () => {
+                                URL.revokeObjectURL(objectUrl);
+                                resolve({ w: probe.videoWidth || 640, h: probe.videoHeight || 360 });
+                            };
+                            probe.onerror = () => {
+                                URL.revokeObjectURL(objectUrl);
+                                resolve({ w: 640, h: 360 });
+                            };
+                            probe.src = objectUrl;
+                        });
+
+                        this.boardData.items.push(createVideoItem({
+                            x: mouseX,
+                            y: mouseY,
+                            videoRef: result.filename,
+                            label: file.name || "Dropped Video",
+                            videoWidth: videoSize.w,
+                            videoHeight: videoSize.h,
+                            generateId: () => this.generateUUID()
+                        }));
+                        this.renderBoard();
+                        await this.saveBoard();
+                    }
                 }
             }
         };
@@ -2266,7 +2368,7 @@ class StoryboardWorkspace {
             
             if (this.boardData.selection.length === 1) {
                 const item = this.boardData.items.find(i => i.id === this.boardData.selection[0]);
-                if (item.type === "image" || item.type === "frame") {
+                if (item.type === "image" || item.type === "video" || item.type === "frame") {
                     this.contextMenu.appendChild(createSeparator());
                     this.contextMenu.appendChild(createHeader("Set as Reference"));
                     
