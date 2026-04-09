@@ -57,8 +57,19 @@ class StoryboardAPI:
         async def get_frame_palette(request):
             board_id = request.match_info["board_id"]
             frame_id = request.match_info["frame_id"]
-            colors = store.get_frame_palette(board_id, frame_id)
+            num_colors = int(request.query.get("num_colors", 8))
+            num_colors = max(4, min(16, num_colors))
+            colors = store.get_frame_palette(board_id, frame_id, num_colors=num_colors)
             return web.json_response({"colors": colors})
+
+        @server.routes.get("/mkr/storyboard/{board_id}/palette/image/{item_id}")
+        async def get_image_palette(request):
+            board_id = request.match_info["board_id"]
+            item_id = request.match_info["item_id"]
+            num_colors = int(request.query.get("num_colors", 8))
+            num_colors = max(4, min(16, num_colors))
+            result = store.get_image_palette(board_id, item_id, num_colors=num_colors)
+            return web.json_response(result)
 
         @server.routes.post("/mkr/storyboard/{board_id}/fill")
         async def fill_placeholder(request):
@@ -91,10 +102,24 @@ class StoryboardAPI:
             board_id = request.match_info["board_id"]
             post = await request.post()
             image = post.get("image")
+            asset = post.get("asset")
             
             if image:
-                filename = store.add_asset(board_id, Image.open(image.file))
-                return web.json_response({"filename": filename})
+                pil_image = Image.open(image.file)
+                width, height = pil_image.size
+                filename = store.add_asset(board_id, pil_image)
+                return web.json_response({"filename": filename, "width": width, "height": height, "kind": "image"})
+            if asset and getattr(asset, "file", None):
+                content_type = (getattr(asset, "content_type", "") or "").lower()
+                if content_type.startswith("image/"):
+                    pil_image = Image.open(asset.file)
+                    width, height = pil_image.size
+                    filename = store.add_asset(board_id, pil_image)
+                    return web.json_response({"filename": filename, "width": width, "height": height, "kind": "image"})
+                if content_type.startswith("video/"):
+                    ext = os.path.splitext(getattr(asset, "filename", "") or "")[1].lower() or ".mp4"
+                    filename = store.add_video_asset(board_id, asset.file.name, filename=f"{uuid.uuid4()}{ext}")
+                    return web.json_response({"filename": filename, "kind": "video"})
             
             return web.Response(status=400)
 
