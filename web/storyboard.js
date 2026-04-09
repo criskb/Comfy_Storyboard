@@ -65,7 +65,7 @@ class StoryboardWorkspace {
         window.addEventListener("keydown", (e) => {
             if (this.overlay.style.display === "flex") {
                 const focused = document.activeElement;
-                if (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA") return;
+                if (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable) return;
 
                 if (e.key === "Delete") {
                     if (this.boardData.selection.length > 0) {
@@ -82,7 +82,7 @@ class StoryboardWorkspace {
         window.addEventListener("paste", (e) => {
             if (this.overlay.style.display === "flex") {
                 const focused = document.activeElement;
-                if (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA") return;
+                if (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable) return;
                 
                 const items = (e.clipboardData || e.originalEvent.clipboardData).items;
                 for (let index in items) {
@@ -1039,6 +1039,11 @@ class StoryboardWorkspace {
             content.oninput = () => {
                 item.content = content.innerText;
             };
+            content.onpaste = (e) => {
+                e.preventDefault();
+                const text = (e.clipboardData || window.clipboardData).getData("text/plain");
+                document.execCommand("insertText", false, text);
+            };
             content.onblur = () => {
                 item.content = content.innerText;
                 this.saveBoard();
@@ -1434,6 +1439,33 @@ class StoryboardWorkspace {
             "#4CAF50", "#2196F3", "#f44336", "#ffeb3b",
             "#9c27b0", "#ff9800", "#795548", "#607d8b"
         ];
+        const fontOptions = [
+            { label: "System Sans", value: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" },
+            { label: "System Serif", value: "ui-serif, Georgia, Cambria, Times New Roman, serif" },
+            { label: "Monospace", value: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
+            { label: "Arial", value: "Arial, Helvetica, sans-serif" },
+            { label: "Verdana", value: "Verdana, Geneva, sans-serif" },
+            { label: "Tahoma", value: "Tahoma, Geneva, sans-serif" },
+            { label: "Trebuchet MS", value: "'Trebuchet MS', Helvetica, sans-serif" },
+            { label: "Georgia", value: "Georgia, serif" },
+            { label: "Times New Roman", value: "'Times New Roman', Times, serif" },
+            { label: "Courier New", value: "'Courier New', Courier, monospace" }
+        ];
+
+        const createFontSelect = (currentValue) => {
+            const normalizedCurrent = (currentValue || "").trim();
+            let optionsHtml = "";
+            let found = false;
+            fontOptions.forEach(opt => {
+                const selected = opt.value === normalizedCurrent;
+                if (selected) found = true;
+                optionsHtml += `<option value="${opt.value}" ${selected ? "selected" : ""}>${opt.label}</option>`;
+            });
+            if (normalizedCurrent && !found) {
+                optionsHtml += `<option value="${normalizedCurrent}" selected>Custom (${normalizedCurrent})</option>`;
+            }
+            return `<select id="inspector-note-font-family">${optionsHtml}</select>`;
+        };
 
         const createColorPicker = (currentColor) => {
             let html = `
@@ -1516,12 +1548,20 @@ class StoryboardWorkspace {
             const noteStyle = item.note_style || {};
             fields += `
                 <div class="inspector-field">
+                    <label>Label</label>
+                    <input type="text" id="inspector-label" value="${item.label || ""}">
+                </div>
+                <div class="inspector-field">
+                    <label>Tags (comma separated)</label>
+                    <input type="text" id="inspector-tags" value="${(item.tags || []).join(", ")}">
+                </div>
+                <div class="inspector-field">
                     <label>Content</label>
                     <textarea id="inspector-content-text" rows="5">${item.content || ""}</textarea>
                 </div>
                 <div class="inspector-field">
                     <label>Font Family</label>
-                    <input type="text" id="inspector-note-font-family" value="${noteStyle.font_family || "Roboto, sans-serif"}">
+                    ${createFontSelect(noteStyle.font_family || "'Roboto', sans-serif")}
                 </div>
                 <div class="inspector-field">
                     <label>Font Size</label>
@@ -1736,6 +1776,14 @@ class StoryboardWorkspace {
                 };
             }
         } else if (item.type === "note") {
+            document.getElementById("inspector-label").onchange = (e) => {
+                item.label = e.target.value;
+                this.saveBoard();
+            };
+            document.getElementById("inspector-tags").onchange = (e) => {
+                item.tags = e.target.value.split(",").map(s => s.trim()).filter(s => s);
+                this.saveBoard();
+            };
             document.getElementById("inspector-content-text").onchange = (e) => {
                 item.content = e.target.value;
                 this.renderBoard();
