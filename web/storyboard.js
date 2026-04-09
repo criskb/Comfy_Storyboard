@@ -148,14 +148,15 @@ class StoryboardWorkspace {
         
         const footer = document.createElement("div");
         footer.className = "storyboard-footer";
+        footer.classList.add("storyboard-floating-prompt");
         footer.innerHTML = `
             <textarea id="storyboard-prompt" placeholder="Enter prompt..."></textarea>
             <button id="storyboard-queue">Queue Prompt</button>
         `;
 
         this.window.appendChild(header);
+        this.canvasContainer.appendChild(footer);
         this.window.appendChild(main);
-        this.window.appendChild(footer);
         
         this.contextMenu = document.createElement("div");
         this.contextMenu.className = "storyboard-context-menu";
