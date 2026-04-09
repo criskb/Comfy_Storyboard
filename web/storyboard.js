@@ -69,10 +69,7 @@ class StoryboardWorkspace {
 
                 if (e.key === "Delete") {
                     if (this.boardData.selection.length > 0) {
-                        this.boardData.items = this.boardData.items.filter(i => !this.boardData.selection.includes(i.id));
-                        this.boardData.selection = [];
-                        this.renderBoard();
-                        this.saveBoard();
+                        this.removeSelectedItems();
                     }
                 } else if ((e.ctrlKey || e.metaKey) && e.key === "c") {
                     this.handleCopy();
@@ -399,6 +396,18 @@ class StoryboardWorkspace {
             return v.toString(16);
         });
     }
+
+    removeSelectedItems() {
+        const selectedSet = new Set(this.boardData.selection);
+        const remaining = this.boardData.items.filter(i => !selectedSet.has(i.id) || i.pinned);
+        this.boardData.items = remaining;
+        this.boardData.selection = this.boardData.selection.filter(id => {
+            const item = this.boardData.items.find(i => i.id === id);
+            return !!item && item.pinned;
+        });
+        this.renderBoard();
+        this.saveBoard();
+    }
     renderBoard() {
         // Track which items are current to remove old ones later
         const currentItemIds = new Set(this.boardData.items.map(i => i.id));
@@ -505,6 +514,7 @@ class StoryboardWorkspace {
         resizeHandle.onmousedown = (e) => {
             const item = this.boardData.items.find(i => i.id === itemId);
             if (!item) return;
+            if (item.pinned) return;
             
             e.stopPropagation();
             e.preventDefault();
@@ -575,7 +585,6 @@ class StoryboardWorkspace {
             if (e.button !== 0) return;
             e.stopPropagation();
             e.preventDefault();
-            this.isInteracting = true;
             
             // Selection logic
             if (e.shiftKey) {
@@ -589,6 +598,13 @@ class StoryboardWorkspace {
                 this.boardData.selection = [itemId];
             }
             this.renderBoard();
+
+            if (item.pinned) {
+                this.saveBoard();
+                return;
+            }
+
+            this.isInteracting = true;
 
             const startX = e.clientX;
             const startY = e.clientY;
@@ -847,6 +863,23 @@ class StoryboardWorkspace {
             pill.remove();
         }
 
+        let pinGlyph = el.querySelector(".storyboard-pin-glyph");
+        if (item.pinned) {
+            if (!pinGlyph) {
+                pinGlyph = document.createElement("div");
+                pinGlyph.className = "storyboard-pin-glyph";
+                pinGlyph.innerHTML = `
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                        <path d="M15 3l6 6-2 2-2-2-3 3v4l-2 2v3h-2v-3l-2-2v-4L5 9 3 11 1 9l6-6 8 0z"></path>
+                    </svg>
+                `;
+                pinGlyph.title = "Pinned";
+                el.appendChild(pinGlyph);
+            }
+        } else if (pinGlyph) {
+            pinGlyph.remove();
+        }
+
         if (item.type === "image") {
             el.classList.add("image-item");
             let wrapper = el.querySelector(".image-wrapper");
@@ -914,13 +947,29 @@ class StoryboardWorkspace {
                 content.className = "note-content";
                 el.appendChild(content);
             }
-            content.innerText = item.content || "";
+            content.contentEditable = !item.pinned;
+            content.spellcheck = false;
+            if (content.innerText !== (item.content || "")) {
+                content.innerText = item.content || "";
+            }
+            content.onmousedown = (e) => e.stopPropagation();
+            content.oninput = () => {
+                item.content = content.innerText;
+            };
+            content.onblur = () => {
+                item.content = content.innerText;
+                this.saveBoard();
+            };
             
+            const style = item.note_style || {};
             const textLength = (item.content || "").length;
             const area = item.w * item.h;
-            let fontSize = Math.sqrt(area / (textLength || 1)) * 0.8;
+            let fontSize = style.font_size || (Math.sqrt(area / (textLength || 1)) * 0.8);
             fontSize = Math.max(12, Math.min(fontSize, item.h * 0.5));
             content.style.fontSize = `${fontSize}px`;
+            content.style.fontFamily = style.font_family || "'Roboto', sans-serif";
+            content.style.fontWeight = style.font_weight || "700";
+            content.style.textAlign = style.text_align || "center";
             
         } else if (item.type === "frame") {
             el.classList.add("frame-item");
@@ -981,7 +1030,8 @@ class StoryboardWorkspace {
         paletteBar.style.display = "flex";
         this.paletteLoading.add(item.id);
         try {
-            const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/${item.id}`);
+            const paletteCount = item.palette_colors || 8;
+            const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/${item.id}?num_colors=${paletteCount}`);
             const { colors } = await response.json();
             if (colors && colors.length > 0) {
                 this.paletteCache.set(item.id, { key: cacheKey, colors });
@@ -1064,41 +1114,50 @@ class StoryboardWorkspace {
                 cx <= (frame.x + frame.w) &&
                 cy <= (frame.y + frame.h)
             );
+        }).sort((a, b) => {
+            if (Math.abs(a.y - b.y) > 10) return a.y - b.y;
+            return a.x - b.x;
         });
 
         if (!itemsInFrame.length) return;
 
         const count = itemsInFrame.length;
-        const totalArea = itemsInFrame.reduce((sum, it) => sum + (it.w * it.h), 0);
-        const avgArea = totalArea / count;
-        const cellBase = Math.max(140, Math.min(280, Math.sqrt(avgArea)));
-
         const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
         const rows = Math.ceil(count / cols);
+        const colWidths = Array(cols).fill(0);
+        const rowHeights = Array(rows).fill(0);
 
         itemsInFrame.forEach((it, idx) => {
-            const aspect = Math.max(0.05, (it.w || 1) / Math.max(1, it.h || 1));
-            let targetW = cellBase;
-            let targetH = cellBase;
-            if (aspect >= 1) {
-                targetH = targetW / aspect;
-            } else {
-                targetW = targetH * aspect;
-            }
-
             const col = idx % cols;
             const row = Math.floor(idx / cols);
-            const cellX = frame.x + margin + col * (cellBase + gap);
-            const cellY = frame.y + margin + row * (cellBase + gap);
-
-            it.w = Math.max(50, targetW);
-            it.h = Math.max(50, targetH);
-            it.x = cellX + (cellBase - it.w) / 2;
-            it.y = cellY + (cellBase - it.h) / 2;
+            colWidths[col] = Math.max(colWidths[col], it.w);
+            rowHeights[row] = Math.max(rowHeights[row], it.h);
         });
 
-        frame.w = (margin * 2) + (cols * cellBase) + ((cols - 1) * gap);
-        frame.h = (margin * 2) + (rows * cellBase) + ((rows - 1) * gap);
+        const xOffsets = [];
+        const yOffsets = [];
+        let cursorX = frame.x + margin;
+        for (let c = 0; c < cols; c++) {
+            xOffsets.push(cursorX);
+            cursorX += colWidths[c] + gap;
+        }
+        let cursorY = frame.y + margin;
+        for (let r = 0; r < rows; r++) {
+            yOffsets.push(cursorY);
+            cursorY += rowHeights[r] + gap;
+        }
+
+        itemsInFrame.forEach((it, idx) => {
+            const col = idx % cols;
+            const row = Math.floor(idx / cols);
+            it.x = xOffsets[col] + (colWidths[col] - it.w) / 2;
+            it.y = yOffsets[row] + (rowHeights[row] - it.h) / 2;
+        });
+
+        const contentW = colWidths.reduce((sum, w) => sum + w, 0) + ((cols - 1) * gap);
+        const contentH = rowHeights.reduce((sum, h) => sum + h, 0) + ((rows - 1) * gap);
+        frame.w = (margin * 2) + contentW;
+        frame.h = (margin * 2) + contentH;
     }
 
     renderInspector() {
@@ -1193,10 +1252,7 @@ class StoryboardWorkspace {
             };
 
             document.getElementById("action-delete-selected").onclick = () => {
-                this.boardData.items = this.boardData.items.filter(i => !this.boardData.selection.includes(i.id));
-                this.boardData.selection = [];
-                this.renderBoard();
-                this.saveBoard();
+                this.removeSelectedItems();
             };
             return;
         }
@@ -1245,19 +1301,72 @@ class StoryboardWorkspace {
                     <input type="text" id="inspector-tags" value="${(item.tags || []).join(", ")}">
                 </div>
             `;
+            if (item.type === "image") {
+                const imagePaletteColors = item.palette_colors || 8;
+                fields += `
+                    <div class="inspector-field">
+                        <label>Image Palette Colors</label>
+                        <select id="inspector-image-palette-colors">
+                            <option value="4" ${imagePaletteColors === 4 ? "selected" : ""}>4</option>
+                            <option value="8" ${imagePaletteColors === 8 ? "selected" : ""}>8</option>
+                            <option value="12" ${imagePaletteColors === 12 ? "selected" : ""}>12</option>
+                            <option value="16" ${imagePaletteColors === 16 ? "selected" : ""}>16</option>
+                        </select>
+                    </div>
+                    <div class="inspector-actions">
+                        <button id="action-generate-image-palette">Generate Palette Image</button>
+                    </div>
+                `;
+            }
         } else if (item.type === "frame") {
+            const framePaletteColors = item.palette_colors || 8;
             fields += `
                 <div class="inspector-field">
                     <label>Label</label>
                     <input type="text" id="inspector-label" value="${item.label || ""}">
                 </div>
+                <div class="inspector-field">
+                    <label>Frame Palette Colors</label>
+                    <select id="inspector-frame-palette-colors">
+                        <option value="4" ${framePaletteColors === 4 ? "selected" : ""}>4</option>
+                        <option value="8" ${framePaletteColors === 8 ? "selected" : ""}>8</option>
+                        <option value="12" ${framePaletteColors === 12 ? "selected" : ""}>12</option>
+                        <option value="16" ${framePaletteColors === 16 ? "selected" : ""}>16</option>
+                    </select>
+                </div>
                 ${createColorPicker(item.color || "#4CAF50")}
             `;
         } else if (item.type === "note") {
+            const noteStyle = item.note_style || {};
             fields += `
                 <div class="inspector-field">
                     <label>Content</label>
                     <textarea id="inspector-content-text" rows="5">${item.content || ""}</textarea>
+                </div>
+                <div class="inspector-field">
+                    <label>Font Family</label>
+                    <input type="text" id="inspector-note-font-family" value="${noteStyle.font_family || "Roboto, sans-serif"}">
+                </div>
+                <div class="inspector-field">
+                    <label>Font Size</label>
+                    <input type="number" id="inspector-note-font-size" min="12" max="300" value="${noteStyle.font_size || ""}" placeholder="Auto">
+                </div>
+                <div class="inspector-field">
+                    <label>Font Weight</label>
+                    <select id="inspector-note-font-weight">
+                        <option value="400" ${(noteStyle.font_weight || "700") === "400" ? "selected" : ""}>400</option>
+                        <option value="500" ${(noteStyle.font_weight || "700") === "500" ? "selected" : ""}>500</option>
+                        <option value="700" ${(noteStyle.font_weight || "700") === "700" ? "selected" : ""}>700</option>
+                        <option value="900" ${(noteStyle.font_weight || "700") === "900" ? "selected" : ""}>900</option>
+                    </select>
+                </div>
+                <div class="inspector-field">
+                    <label>Text Align</label>
+                    <select id="inspector-note-text-align">
+                        <option value="left" ${(noteStyle.text_align || "center") === "left" ? "selected" : ""}>Left</option>
+                        <option value="center" ${(noteStyle.text_align || "center") === "center" ? "selected" : ""}>Center</option>
+                        <option value="right" ${(noteStyle.text_align || "center") === "right" ? "selected" : ""}>Right</option>
+                    </select>
                 </div>
                 ${createColorPicker(item.color || "#ffeb3b")}
             `;
@@ -1268,6 +1377,7 @@ class StoryboardWorkspace {
                 <button id="action-copy">Copy to Clipboard</button>
                 <button id="action-front">Bring to Front</button>
                 <button id="action-back">Send to Back</button>
+                <button id="action-pin-toggle">${item.pinned ? "Unpin Item" : "Pin Item"}</button>
                 ${item.type === "frame" ? '<button id="action-auto-layout">Auto Arrange In Frame</button>' : ""}
                 <button id="action-delete" class="danger">Delete Item</button>
             </div>
@@ -1312,11 +1422,21 @@ class StoryboardWorkspace {
         };
 
         document.getElementById("action-delete").onclick = () => {
+            if (item.pinned) return;
             this.boardData.items = this.boardData.items.filter(i => i.id !== item.id);
             this.boardData.selection = [];
             this.renderBoard();
             this.saveBoard();
         };
+
+        const pinToggleButton = document.getElementById("action-pin-toggle");
+        if (pinToggleButton) {
+            pinToggleButton.onclick = () => {
+                item.pinned = !item.pinned;
+                this.renderBoard();
+                this.saveBoard();
+            };
+        }
 
         const autoLayoutButton = document.getElementById("action-auto-layout");
         if (autoLayoutButton) {
@@ -1339,18 +1459,81 @@ class StoryboardWorkspace {
                 item.tags = e.target.value.split(",").map(s => s.trim()).filter(s => s);
                 this.saveBoard();
             };
+
+            if (item.type === "image") {
+                const imagePaletteSelect = document.getElementById("inspector-image-palette-colors");
+                if (imagePaletteSelect) {
+                    imagePaletteSelect.onchange = (e) => {
+                        item.palette_colors = parseInt(e.target.value, 10) || 8;
+                        this.saveBoard();
+                    };
+                }
+
+                const generatePaletteBtn = document.getElementById("action-generate-image-palette");
+                if (generatePaletteBtn) {
+                    generatePaletteBtn.onclick = async () => {
+                        const paletteCount = item.palette_colors || 8;
+                        const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/image/${item.id}?num_colors=${paletteCount}`);
+                        const result = await response.json();
+                        if (result.filename) {
+                            const paletteItem = createImageItem({
+                                x: item.x + item.w + 20,
+                                y: item.y,
+                                imageRef: result.filename,
+                                label: `${item.label || "Image"} Palette`,
+                                imageWidth: result.width,
+                                imageHeight: result.height,
+                                generateId: () => this.generateUUID(),
+                                extra: { tags: ["palette"] }
+                            });
+                            this.boardData.items.push(paletteItem);
+                            this.boardData.selection = [paletteItem.id];
+                            this.renderBoard();
+                            this.saveBoard();
+                        }
+                    };
+                }
+            }
         } else if (item.type === "frame") {
             document.getElementById("inspector-label").onchange = (e) => {
                 item.label = e.target.value;
                 this.renderBoard();
                 this.saveBoard();
             };
+            const framePaletteSelect = document.getElementById("inspector-frame-palette-colors");
+            if (framePaletteSelect) {
+                framePaletteSelect.onchange = () => {
+                    item.palette_colors = parseInt(framePaletteSelect.value, 10) || 8;
+                    this.paletteCache.delete(item.id);
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
         } else if (item.type === "note") {
             document.getElementById("inspector-content-text").onchange = (e) => {
                 item.content = e.target.value;
                 this.renderBoard();
                 this.saveBoard();
             };
+            item.note_style = item.note_style || {};
+            const bindTypography = (id, key, castFn = (v) => v) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.onchange = () => {
+                    const value = castFn(el.value);
+                    if (value === "" || value === null || Number.isNaN(value)) {
+                        delete item.note_style[key];
+                    } else {
+                        item.note_style[key] = value;
+                    }
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            };
+            bindTypography("inspector-note-font-family", "font_family");
+            bindTypography("inspector-note-font-size", "font_size", (v) => v ? parseInt(v, 10) : "");
+            bindTypography("inspector-note-font-weight", "font_weight");
+            bindTypography("inspector-note-text-align", "text_align");
         }
 
         // Color handling for both frame and note
@@ -1554,6 +1737,16 @@ class StoryboardWorkspace {
         if (this.boardData.selection.length > 0) {
             this.contextMenu.appendChild(createButton("Bring to Front", () => document.getElementById("action-front")?.click()));
             this.contextMenu.appendChild(createButton("Send to Back", () => document.getElementById("action-back")?.click()));
+            const selectedItems = this.boardData.selection
+                .map(id => this.boardData.items.find(i => i.id === id))
+                .filter(Boolean);
+            const anyPinned = selectedItems.some(i => i.pinned);
+            const pinLabel = anyPinned ? "Unpin Selected" : "Pin Selected";
+            this.contextMenu.appendChild(createButton(pinLabel, () => {
+                selectedItems.forEach(i => i.pinned = !anyPinned);
+                this.renderBoard();
+                this.saveBoard();
+            }));
             
             if (this.boardData.selection.length === 1) {
                 const item = this.boardData.items.find(i => i.id === this.boardData.selection[0]);

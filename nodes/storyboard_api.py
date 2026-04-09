@@ -57,8 +57,19 @@ class StoryboardAPI:
         async def get_frame_palette(request):
             board_id = request.match_info["board_id"]
             frame_id = request.match_info["frame_id"]
-            colors = store.get_frame_palette(board_id, frame_id)
+            num_colors = int(request.query.get("num_colors", 8))
+            num_colors = max(4, min(16, num_colors))
+            colors = store.get_frame_palette(board_id, frame_id, num_colors=num_colors)
             return web.json_response({"colors": colors})
+
+        @server.routes.get("/mkr/storyboard/{board_id}/palette/image/{item_id}")
+        async def get_image_palette(request):
+            board_id = request.match_info["board_id"]
+            item_id = request.match_info["item_id"]
+            num_colors = int(request.query.get("num_colors", 8))
+            num_colors = max(4, min(16, num_colors))
+            result = store.get_image_palette(board_id, item_id, num_colors=num_colors)
+            return web.json_response(result)
 
         @server.routes.post("/mkr/storyboard/{board_id}/fill")
         async def fill_placeholder(request):

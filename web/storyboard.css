@@ -199,7 +199,7 @@
     margin-bottom: 5px;
 }
 
-.inspector-field input, .inspector-field textarea {
+.inspector-field input, .inspector-field textarea, .inspector-field select {
     width: 100%;
     background: #1a1a1a;
     border: 1px solid #444;
@@ -301,6 +301,22 @@
     z-index: 5;
     pointer-events: none;
     text-transform: uppercase;
+}
+
+.storyboard-pin-glyph {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(20, 20, 20, 0.6);
+    color: #f5f5f5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 7;
+    pointer-events: none;
 }
 
 .storyboard-crop-glyph {
@@ -450,6 +466,10 @@
     justify-content: center;
     align-items: center;
     line-height: 1.2;
+}
+
+.note-content[contenteditable="true"] {
+    cursor: text;
 }
 
 #storyboard-add-note {
