@@ -253,6 +253,61 @@
     transform-origin: 0 0;
 }
 
+.storyboard-minimap {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    width: 190px;
+    height: 132px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(8, 10, 16, 0.85);
+    backdrop-filter: blur(2px);
+    z-index: 22;
+    overflow: hidden;
+    cursor: crosshair;
+}
+
+.storyboard-minimap-items {
+    position: absolute;
+    inset: 0;
+}
+
+.storyboard-minimap-item {
+    position: absolute;
+    border-radius: 2px;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.storyboard-minimap-item.frame-item {
+    background: rgba(76, 175, 80, 0.2);
+    border-color: rgba(129, 199, 132, 0.8);
+}
+
+.storyboard-minimap-item.note-item {
+    background: rgba(255, 235, 59, 0.4);
+    border-color: rgba(255, 241, 118, 0.95);
+}
+
+.storyboard-minimap-item.image-item {
+    background: rgba(33, 150, 243, 0.28);
+    border-color: rgba(144, 202, 249, 0.95);
+}
+
+.storyboard-minimap-item.slot-item {
+    background: rgba(156, 163, 175, 0.2);
+    border-color: rgba(229, 231, 235, 0.9);
+}
+
+.storyboard-minimap-viewport {
+    position: absolute;
+    border: 2px solid #ffffff;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.15);
+    border-radius: 3px;
+    pointer-events: none;
+}
+
 .storyboard-item {
     position: absolute;
     border: 4px solid transparent;
