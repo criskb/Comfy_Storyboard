@@ -406,7 +406,7 @@
 
 .storyboard-item.image-item {
     border-radius: 12px;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .storyboard-item.image-item .image-wrapper {
@@ -414,6 +414,7 @@
     height: 100%;
     overflow: hidden;
     position: relative;
+    border-radius: 12px;
 }
 
 .storyboard-item.image-item img {
@@ -584,6 +585,11 @@
     pointer-events: auto;
 }
 
+.frame-palette-bar[data-position="left"],
+.image-palette-bar[data-position="left"] {
+    gap: 12px;
+}
+
 .palette-color {
     display: flex;
     align-items: center;
@@ -614,6 +620,18 @@
 
 .palette-color:active {
     transform: scale(0.95);
+}
+
+.frame-palette-bar[data-position="left"] .palette-color,
+.image-palette-bar[data-position="left"] .palette-color {
+    width: 160px;
+    height: 56px;
+    border-radius: 28px;
+}
+
+.frame-palette-bar[data-position="left"] .palette-color span,
+.image-palette-bar[data-position="left"] .palette-color span {
+    transform: none;
 }
 
 .color-presets {
