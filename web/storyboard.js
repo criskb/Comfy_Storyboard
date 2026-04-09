@@ -119,16 +119,15 @@ class StoryboardWorkspace {
             <div class="storyboard-header-left">
                 <span>Storyboard:</span>
                 <select id="storyboard-selector"></select>
-                <button id="storyboard-refresh-board" title="Refresh Board">🔄</button>
-                <button id="storyboard-new-board" title="New Board">➕</button>
-                <button id="storyboard-rename-board" title="Rename Board">✏️</button>
-                <button id="storyboard-delete-board" class="danger" title="Delete Board">🗑️</button>
+                <button id="storyboard-refresh-board" class="board-action-btn" title="Refresh Board">⟳ Refresh</button>
+                <button id="storyboard-new-board" class="board-action-btn" title="New Board">＋ New</button>
+                <button id="storyboard-rename-board" class="board-action-btn" title="Rename Board">✎ Rename</button>
+                <button id="storyboard-delete-board" class="board-action-btn danger" title="Delete Board">🗑 Delete</button>
             </div>
             <div class="storyboard-controls">
                 <button id="storyboard-add-slot">+ Add Slot</button>
                 <button id="storyboard-add-note">+ Add Note</button>
                 <button id="storyboard-add-frame">+ Add Frame</button>
-                <button id="storyboard-clear" class="danger">Clear Board</button>
                 <button id="storyboard-theme-toggle" class="storyboard-theme-toggle" title="Theme: System">◐</button>
                 <button id="storyboard-close">✕</button>
             </div>
@@ -247,7 +246,7 @@ class StoryboardWorkspace {
         };
 
         document.getElementById("storyboard-delete-board").onclick = async () => {
-            if (confirm(`Are you sure you want to delete the storyboard "${this.boardId}"? This cannot be undone.`)) {
+            if (confirm(`Delete storyboard "${this.boardId}"?\n\nChoose OK for Yes, or Cancel for No. This cannot be undone.`)) {
                 const response = await fetch(`/mkr/storyboard/${this.boardId}`, { method: "DELETE" });
                 const result = await response.json();
                 if (result.status === "ok") {
@@ -313,15 +312,6 @@ class StoryboardWorkspace {
 
         document.getElementById("storyboard-queue").onclick = () => {
             app.queuePrompt(0);
-        };
-
-        document.getElementById("storyboard-clear").onclick = async () => {
-            if (confirm("Are you sure you want to clear the entire board?")) {
-                this.boardData.items = [];
-                this.boardData.selection = [];
-                this.renderBoard();
-                await this.saveBoard();
-            }
         };
 
         this.setupInteractions();
