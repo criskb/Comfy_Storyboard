@@ -924,6 +924,7 @@ class StoryboardWorkspace {
                 img.style.top = "0";
                 img.style.objectFit = "cover";
             }
+            this.updateImagePalette(el, item);
             
         } else if (item.type === "slot") {
             el.classList.add("slot-item");
@@ -1126,6 +1127,39 @@ class StoryboardWorkspace {
         } finally {
             this.paletteLoading.delete(item.id);
         }
+    }
+
+    updateImagePalette(el, item) {
+        let paletteBar = el.querySelector(".image-palette-bar");
+        if (!paletteBar) {
+            paletteBar = document.createElement("div");
+            paletteBar.className = "image-palette-bar";
+            el.appendChild(paletteBar);
+        }
+
+        const colors = item.image_palette || [];
+        if (!item.image_palette_visible || !colors.length) {
+            paletteBar.style.display = "none";
+            return;
+        }
+
+        const palettePosition = item.palette_position || "left";
+        if (palettePosition === "left") {
+            paletteBar.dataset.position = "left";
+            paletteBar.style.left = "-14px";
+            paletteBar.style.bottom = "50%";
+            paletteBar.style.transform = "translate(-100%, 50%)";
+            paletteBar.style.flexDirection = "column";
+        } else {
+            paletteBar.dataset.position = "bottom";
+            paletteBar.style.left = "50%";
+            paletteBar.style.bottom = "-170px";
+            paletteBar.style.transform = "translateX(-50%)";
+            paletteBar.style.flexDirection = "row";
+        }
+
+        paletteBar.style.display = "flex";
+        this.renderPaletteColors(paletteBar, colors);
     }
 
     async copyToClipboard(text) {
@@ -1593,12 +1627,6 @@ class StoryboardWorkspace {
                 if (imagePalettePositionSelect) {
                     imagePalettePositionSelect.onchange = (e) => {
                         item.palette_position = e.target.value;
-                        const linkedPalette = this.boardData.items.find(i => i.type === "palette" && i.palette_source_id === item.id);
-                        if (linkedPalette) {
-                            const position = this.getPaletteWidgetPosition(item, linkedPalette.w, linkedPalette.h);
-                            linkedPalette.x = position.x;
-                            linkedPalette.y = position.y;
-                        }
                         this.renderBoard();
                         this.saveBoard();
                     };
@@ -1615,29 +1643,9 @@ class StoryboardWorkspace {
                             }
                             const result = await response.json();
                             if (result.colors && result.colors.length) {
-                                const pillWidth = 88;
-                                const pillGap = 10;
-                                const paletteWidth = Math.max(240, result.colors.length * (pillWidth + pillGap) + 20);
-                                const existingPalette = this.boardData.items.find(i => i.type === "palette" && i.palette_source_id === item.id);
-                                const paletteItem = existingPalette || {
-                                    id: this.generateUUID(),
-                                    type: "palette",
-                                    tags: ["palette"],
-                                };
-
-                                const position = this.getPaletteWidgetPosition(item, paletteWidth, 72);
-                                paletteItem.x = position.x;
-                                paletteItem.y = position.y;
-                                paletteItem.w = paletteWidth;
-                                paletteItem.h = 72;
-                                paletteItem.label = `${item.label || "Image"} Palette`;
-                                paletteItem.palette_data = result.colors;
-                                paletteItem.palette_source_id = item.id;
-
-                                if (!existingPalette) {
-                                    this.boardData.items.push(paletteItem);
-                                }
-                                this.boardData.selection = [paletteItem.id];
+                                item.image_palette = result.colors;
+                                item.image_palette_visible = true;
+                                this.boardData.selection = [item.id];
                                 this.renderBoard();
                                 this.saveBoard();
                             } else {

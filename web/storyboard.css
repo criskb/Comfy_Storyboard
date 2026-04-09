@@ -468,21 +468,6 @@
     align-items: center;
 }
 
-.frame-palette-bar[data-position="left"] .palette-color,
-.palette-widget.left-position .palette-color {
-    transform: rotate(90deg);
-}
-
-.frame-palette-bar[data-position="left"] .palette-color:hover,
-.palette-widget.left-position .palette-color:hover {
-    transform: rotate(90deg) translateY(-8px);
-}
-
-.frame-palette-bar[data-position="left"] .palette-color:active,
-.palette-widget.left-position .palette-color:active {
-    transform: rotate(90deg) scale(0.95);
-}
-
 .palette-link-badge {
     position: absolute;
     top: 6px;
@@ -585,7 +570,8 @@
     font-weight: bold;
 }
 
-.frame-palette-bar {
+.frame-palette-bar,
+.image-palette-bar {
     position: absolute;
     bottom: -170px;
     left: 50%;
