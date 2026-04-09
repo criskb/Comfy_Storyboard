@@ -425,6 +425,34 @@
     display: block;
 }
 
+.image-meta {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    z-index: 8;
+    pointer-events: none;
+}
+
+.image-chip {
+    font-size: 11px;
+    line-height: 1;
+    padding: 5px 8px;
+    border-radius: 999px;
+    font-weight: 700;
+    background: rgba(17, 24, 39, 0.8);
+    color: #e5e7eb;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.image-chip-label {
+    background: rgba(37, 99, 235, 0.8);
+    color: #eaf2ff;
+}
+
 .storyboard-item.slot-item {
     background: #1a1a1a;
     border: 4px dashed #444;
@@ -540,7 +568,7 @@
 
 .storyboard-item.frame-item {
     border: 4px solid #4CAF50;
-    background: rgba(76, 175, 80, 0.05);
+    background: rgba(158, 158, 158, 0.08);
     pointer-events: auto;
     border-radius: 16px;
     z-index: 1;

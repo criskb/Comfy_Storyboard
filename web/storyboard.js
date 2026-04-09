@@ -924,6 +924,27 @@ class StoryboardWorkspace {
                 img.style.top = "0";
                 img.style.objectFit = "cover";
             }
+
+            let meta = el.querySelector(".image-meta");
+            if (!meta) {
+                meta = document.createElement("div");
+                meta.className = "image-meta";
+                el.appendChild(meta);
+            }
+            meta.innerHTML = "";
+            if (item.label) {
+                const labelChip = document.createElement("div");
+                labelChip.className = "image-chip image-chip-label";
+                labelChip.innerText = item.label;
+                meta.appendChild(labelChip);
+            }
+            (item.tags || []).forEach(tag => {
+                const tagChip = document.createElement("div");
+                tagChip.className = "image-chip image-chip-tag";
+                tagChip.innerText = `#${tag}`;
+                meta.appendChild(tagChip);
+            });
+            meta.style.display = meta.children.length > 0 ? "flex" : "none";
             this.updateImagePalette(el, item);
             
         } else if (item.type === "slot") {
@@ -1450,9 +1471,6 @@ class StoryboardWorkspace {
                             <option value="bottom" ${imagePalettePosition === "bottom" ? "selected" : ""}>Bottom Center</option>
                         </select>
                     </div>
-                    <div class="inspector-actions">
-                        <button id="action-generate-image-palette">Show Palette</button>
-                    </div>
                 `;
             }
         } else if (item.type === "frame") {
@@ -1524,6 +1542,7 @@ class StoryboardWorkspace {
                 <button id="action-back">Send to Back</button>
                 <button id="action-pin-toggle">${item.pinned ? "Unpin Item" : "Pin Item"}</button>
                 ${item.type === "frame" ? `<button id="action-toggle-palette">${item.palette_hidden ? "Show Palette" : "Hide Palette"}</button>` : ""}
+                ${item.type === "image" ? `<button id="action-toggle-image-palette">${item.image_palette_visible ? "Hide Palette" : "Show Palette"}</button>` : ""}
                 ${item.type === "frame" ? '<button id="action-auto-layout">Auto Arrange In Frame</button>' : ""}
                 <button id="action-delete" class="danger">Delete Item</button>
             </div>
@@ -1593,6 +1612,45 @@ class StoryboardWorkspace {
             };
         }
 
+        const toggleImagePaletteButton = document.getElementById("action-toggle-image-palette");
+        if (toggleImagePaletteButton) {
+            toggleImagePaletteButton.onclick = async () => {
+                if (item.image_palette_visible) {
+                    item.image_palette_visible = false;
+                    this.renderBoard();
+                    this.saveBoard();
+                    return;
+                }
+
+                if (item.image_palette && item.image_palette.length) {
+                    item.image_palette_visible = true;
+                    this.renderBoard();
+                    this.saveBoard();
+                    return;
+                }
+
+                try {
+                    const paletteCount = item.palette_colors || 8;
+                    const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/image/${item.id}?num_colors=${paletteCount}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const result = await response.json();
+                    if (result.colors && result.colors.length) {
+                        item.image_palette = result.colors;
+                        item.image_palette_visible = true;
+                        this.renderBoard();
+                        this.saveBoard();
+                    } else {
+                        alert("No palette colors found for this image.");
+                    }
+                } catch (err) {
+                    console.error("Show Palette failed:", err);
+                    alert("Show Palette failed. Check server logs and retry.");
+                }
+            };
+        }
+
         const autoLayoutButton = document.getElementById("action-auto-layout");
         if (autoLayoutButton) {
             autoLayoutButton.onclick = () => {
@@ -1632,31 +1690,6 @@ class StoryboardWorkspace {
                     };
                 }
 
-                const generatePaletteBtn = document.getElementById("action-generate-image-palette");
-                if (generatePaletteBtn) {
-                    generatePaletteBtn.onclick = async () => {
-                        try {
-                            const paletteCount = item.palette_colors || 8;
-                            const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/image/${item.id}?num_colors=${paletteCount}`);
-                            if (!response.ok) {
-                                throw new Error(`HTTP ${response.status}`);
-                            }
-                            const result = await response.json();
-                            if (result.colors && result.colors.length) {
-                                item.image_palette = result.colors;
-                                item.image_palette_visible = true;
-                                this.boardData.selection = [item.id];
-                                this.renderBoard();
-                                this.saveBoard();
-                            } else {
-                                alert("No palette colors found for this image.");
-                            }
-                        } catch (err) {
-                            console.error("Show Palette failed:", err);
-                            alert("Show Palette failed. Check server logs and retry.");
-                        }
-                    };
-                }
             }
         } else if (item.type === "frame") {
             document.getElementById("inspector-label").onchange = (e) => {
@@ -1744,6 +1777,14 @@ class StoryboardWorkspace {
         window.addEventListener("click", (e) => {
             if (this.contextMenu && !this.contextMenu.contains(e.target)) {
                 this.contextMenu.style.display = "none";
+            }
+        });
+
+        // Exit inline note editing when user clicks outside note text.
+        window.addEventListener("mousedown", (e) => {
+            const activeEl = document.activeElement;
+            if (activeEl?.classList?.contains("note-content") && !activeEl.contains(e.target)) {
+                activeEl.blur();
             }
         });
 
