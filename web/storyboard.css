@@ -128,6 +128,7 @@
     flex: 1;
     display: flex;
     overflow: hidden;
+    position: relative;
 }
 
 .storyboard-canvas-container {
@@ -146,6 +147,34 @@
     color: #eee;
     font-family: sans-serif;
     overflow-y: auto;
+}
+
+.storyboard-inspector.closed {
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    border-left: none;
+    overflow: hidden;
+}
+
+.storyboard-inspector-toggle {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    border: 1px solid #5b5b5b;
+    background: rgba(35, 35, 35, 0.95);
+    color: #eee;
+    cursor: pointer;
+    z-index: 30;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.storyboard-inspector-toggle:hover {
+    background: rgba(50, 50, 50, 0.98);
 }
 
 .storyboard-inspector h3 {

@@ -59,6 +59,7 @@ class StoryboardWorkspace {
         this.paletteLoading = new Set(); // frameIds currently fetching
         this.internalClipboard = [];
         this.needsReload = false;
+        this.inspectorOpen = false;
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
@@ -142,9 +143,16 @@ class StoryboardWorkspace {
             <div id="inspector-content">Select an item to see details</div>
         `;
 
+        this.inspectorToggle = document.createElement("button");
+        this.inspectorToggle.className = "storyboard-inspector-toggle";
+        this.inspectorToggle.title = "Open Inspector";
+        this.inspectorToggle.innerText = "☰";
+        this.inspectorToggle.onclick = () => this.setInspectorOpen(!this.inspectorOpen);
+
         this.canvasContainer.appendChild(this.canvas);
         main.appendChild(this.canvasContainer);
         main.appendChild(this.inspector);
+        main.appendChild(this.inspectorToggle);
         
         const footer = document.createElement("div");
         footer.className = "storyboard-footer";
@@ -272,6 +280,14 @@ class StoryboardWorkspace {
         };
 
         this.setupInteractions();
+        this.setInspectorOpen(false);
+    }
+
+    setInspectorOpen(open) {
+        this.inspectorOpen = open;
+        this.inspector.classList.toggle("closed", !open);
+        this.inspectorToggle.innerText = open ? "✕" : "☰";
+        this.inspectorToggle.title = open ? "Close Inspector" : "Open Inspector";
     }
 
     async show(boardId, node) {
@@ -1033,6 +1049,58 @@ class StoryboardWorkspace {
         setTimeout(() => el.style.transform = originalTransform, 200);
     }
 
+    autoArrangeFrame(frame) {
+        if (!frame || frame.type !== "frame") return;
+
+        const margin = 24;
+        const gap = 20;
+        const itemsInFrame = this.boardData.items.filter(it => {
+            if (it.id === frame.id || it.type === "frame") return false;
+            const cx = it.x + it.w / 2;
+            const cy = it.y + it.h / 2;
+            return (
+                cx >= frame.x &&
+                cy >= frame.y &&
+                cx <= (frame.x + frame.w) &&
+                cy <= (frame.y + frame.h)
+            );
+        });
+
+        if (!itemsInFrame.length) return;
+
+        const count = itemsInFrame.length;
+        const totalArea = itemsInFrame.reduce((sum, it) => sum + (it.w * it.h), 0);
+        const avgArea = totalArea / count;
+        const cellBase = Math.max(140, Math.min(280, Math.sqrt(avgArea)));
+
+        const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+        const rows = Math.ceil(count / cols);
+
+        itemsInFrame.forEach((it, idx) => {
+            const aspect = Math.max(0.05, (it.w || 1) / Math.max(1, it.h || 1));
+            let targetW = cellBase;
+            let targetH = cellBase;
+            if (aspect >= 1) {
+                targetH = targetW / aspect;
+            } else {
+                targetW = targetH * aspect;
+            }
+
+            const col = idx % cols;
+            const row = Math.floor(idx / cols);
+            const cellX = frame.x + margin + col * (cellBase + gap);
+            const cellY = frame.y + margin + row * (cellBase + gap);
+
+            it.w = Math.max(50, targetW);
+            it.h = Math.max(50, targetH);
+            it.x = cellX + (cellBase - it.w) / 2;
+            it.y = cellY + (cellBase - it.h) / 2;
+        });
+
+        frame.w = (margin * 2) + (cols * cellBase) + ((cols - 1) * gap);
+        frame.h = (margin * 2) + (rows * cellBase) + ((rows - 1) * gap);
+    }
+
     renderInspector() {
         const content = document.getElementById("inspector-content");
         if (this.boardData.selection.length === 0) {
@@ -1200,6 +1268,7 @@ class StoryboardWorkspace {
                 <button id="action-copy">Copy to Clipboard</button>
                 <button id="action-front">Bring to Front</button>
                 <button id="action-back">Send to Back</button>
+                ${item.type === "frame" ? '<button id="action-auto-layout">Auto Arrange In Frame</button>' : ""}
                 <button id="action-delete" class="danger">Delete Item</button>
             </div>
         `;
@@ -1248,6 +1317,17 @@ class StoryboardWorkspace {
             this.renderBoard();
             this.saveBoard();
         };
+
+        const autoLayoutButton = document.getElementById("action-auto-layout");
+        if (autoLayoutButton) {
+            autoLayoutButton.onclick = () => {
+                this.autoArrangeFrame(item);
+                this.renderBoard();
+                this.saveBoard();
+                const frameEl = this.itemElements.get(item.id);
+                if (frameEl) this.updateFramePalette(frameEl, item);
+            };
+        }
 
         if (item.type === "image" || item.type === "slot") {
             document.getElementById("inspector-label").onchange = (e) => {
