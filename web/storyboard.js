@@ -1,5 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { createImageItem } from "./storyboard_item_utils.js";
+import { copyTextToClipboard } from "./storyboard_clipboard.js";
 
 // Load CSS
 const link = document.createElement("link");
@@ -57,6 +59,7 @@ class StoryboardWorkspace {
         this.paletteLoading = new Set(); // frameIds currently fetching
         this.internalClipboard = [];
         this.needsReload = false;
+        this.inspectorOpen = false;
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
@@ -66,10 +69,7 @@ class StoryboardWorkspace {
 
                 if (e.key === "Delete") {
                     if (this.boardData.selection.length > 0) {
-                        this.boardData.items = this.boardData.items.filter(i => !this.boardData.selection.includes(i.id));
-                        this.boardData.selection = [];
-                        this.renderBoard();
-                        this.saveBoard();
+                        this.removeSelectedItems();
                     }
                 } else if ((e.ctrlKey || e.metaKey) && e.key === "c") {
                     this.handleCopy();
@@ -140,20 +140,28 @@ class StoryboardWorkspace {
             <div id="inspector-content">Select an item to see details</div>
         `;
 
+        this.inspectorToggle = document.createElement("button");
+        this.inspectorToggle.className = "storyboard-inspector-toggle";
+        this.inspectorToggle.title = "Open Inspector";
+        this.inspectorToggle.innerText = "☰";
+        this.inspectorToggle.onclick = () => this.setInspectorOpen(!this.inspectorOpen);
+
         this.canvasContainer.appendChild(this.canvas);
         main.appendChild(this.canvasContainer);
         main.appendChild(this.inspector);
+        main.appendChild(this.inspectorToggle);
         
         const footer = document.createElement("div");
         footer.className = "storyboard-footer";
+        footer.classList.add("storyboard-floating-prompt");
         footer.innerHTML = `
             <textarea id="storyboard-prompt" placeholder="Enter prompt..."></textarea>
             <button id="storyboard-queue">Queue Prompt</button>
         `;
 
         this.window.appendChild(header);
+        this.canvasContainer.appendChild(footer);
         this.window.appendChild(main);
-        this.window.appendChild(footer);
         
         this.contextMenu = document.createElement("div");
         this.contextMenu.className = "storyboard-context-menu";
@@ -269,6 +277,14 @@ class StoryboardWorkspace {
         };
 
         this.setupInteractions();
+        this.setInspectorOpen(false);
+    }
+
+    setInspectorOpen(open) {
+        this.inspectorOpen = open;
+        this.inspector.classList.toggle("closed", !open);
+        this.inspectorToggle.innerText = open ? "✕" : "☰";
+        this.inspectorToggle.title = open ? "Close Inspector" : "Open Inspector";
     }
 
     async show(boardId, node) {
@@ -381,6 +397,17 @@ class StoryboardWorkspace {
         });
     }
 
+    removeSelectedItems() {
+        const selectedSet = new Set(this.boardData.selection);
+        const remaining = this.boardData.items.filter(i => !selectedSet.has(i.id) || i.pinned);
+        this.boardData.items = remaining;
+        this.boardData.selection = this.boardData.selection.filter(id => {
+            const item = this.boardData.items.find(i => i.id === id);
+            return !!item && item.pinned;
+        });
+        this.renderBoard();
+        this.saveBoard();
+    }
     renderBoard() {
         // Track which items are current to remove old ones later
         const currentItemIds = new Set(this.boardData.items.map(i => i.id));
@@ -487,6 +514,7 @@ class StoryboardWorkspace {
         resizeHandle.onmousedown = (e) => {
             const item = this.boardData.items.find(i => i.id === itemId);
             if (!item) return;
+            if (item.pinned) return;
             
             e.stopPropagation();
             e.preventDefault();
@@ -557,7 +585,6 @@ class StoryboardWorkspace {
             if (e.button !== 0) return;
             e.stopPropagation();
             e.preventDefault();
-            this.isInteracting = true;
             
             // Selection logic
             if (e.shiftKey) {
@@ -571,6 +598,13 @@ class StoryboardWorkspace {
                 this.boardData.selection = [itemId];
             }
             this.renderBoard();
+
+            if (item.pinned) {
+                this.saveBoard();
+                return;
+            }
+
+            this.isInteracting = true;
 
             const startX = e.clientX;
             const startY = e.clientY;
@@ -777,7 +811,8 @@ class StoryboardWorkspace {
                 method: "POST",
                 body: formData
             });
-            const { filename } = await response.json();
+            const result = await response.json();
+            const { filename, width, height } = result;
             
             if (filename) {
                 // Find a good place to paste (e.g. center of viewport)
@@ -785,16 +820,17 @@ class StoryboardWorkspace {
                 const centerX = (viewport.width / 2 - this.offset.x) / this.scale;
                 const centerY = (viewport.height / 2 - this.offset.y) / this.scale;
                 
-                const newItem = {
-                    id: this.generateUUID(),
-                    type: "image",
-                    x: centerX - 256,
-                    y: centerY - 256,
-                    w: 512,
-                    h: 512,
-                    image_ref: filename,
-                    label: "Pasted Image"
-                };
+                const newItem = createImageItem({
+                    x: centerX,
+                    y: centerY,
+                    imageRef: filename,
+                    label: "Pasted Image",
+                    imageWidth: width,
+                    imageHeight: height,
+                    generateId: () => this.generateUUID()
+                });
+                newItem.x -= newItem.w / 2;
+                newItem.y -= newItem.h / 2;
                 this.boardData.items.push(newItem);
                 this.boardData.selection = [newItem.id];
                 this.renderBoard();
@@ -825,6 +861,23 @@ class StoryboardWorkspace {
             pill.innerText = `REF ${item.ref_id}`;
         } else if (pill) {
             pill.remove();
+        }
+
+        let pinGlyph = el.querySelector(".storyboard-pin-glyph");
+        if (item.pinned) {
+            if (!pinGlyph) {
+                pinGlyph = document.createElement("div");
+                pinGlyph.className = "storyboard-pin-glyph";
+                pinGlyph.innerHTML = `
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                        <path d="M15 3l6 6-2 2-2-2-3 3v4l-2 2v3h-2v-3l-2-2v-4L5 9 3 11 1 9l6-6 8 0z"></path>
+                    </svg>
+                `;
+                pinGlyph.title = "Pinned";
+                el.appendChild(pinGlyph);
+            }
+        } else if (pinGlyph) {
+            pinGlyph.remove();
         }
 
         if (item.type === "image") {
@@ -871,6 +924,28 @@ class StoryboardWorkspace {
                 img.style.top = "0";
                 img.style.objectFit = "cover";
             }
+
+            let meta = el.querySelector(".image-meta");
+            if (!meta) {
+                meta = document.createElement("div");
+                meta.className = "image-meta";
+                el.appendChild(meta);
+            }
+            meta.innerHTML = "";
+            if (item.label) {
+                const labelChip = document.createElement("div");
+                labelChip.className = "image-chip image-chip-label";
+                labelChip.innerText = item.label;
+                meta.appendChild(labelChip);
+            }
+            (item.tags || []).forEach(tag => {
+                const tagChip = document.createElement("div");
+                tagChip.className = "image-chip image-chip-tag";
+                tagChip.innerText = `#${tag}`;
+                meta.appendChild(tagChip);
+            });
+            meta.style.display = meta.children.length > 0 ? "flex" : "none";
+            this.updateImagePalette(el, item);
             
         } else if (item.type === "slot") {
             el.classList.add("slot-item");
@@ -881,6 +956,67 @@ class StoryboardWorkspace {
                 el.appendChild(label);
             }
             label.innerText = item.label || "Empty Slot";
+            
+        } else if (item.type === "palette") {
+            el.classList.add("palette-widget-item");
+            let container = el.querySelector(".palette-widget");
+            if (!container) {
+                container = document.createElement("div");
+                container.className = "palette-widget";
+                el.appendChild(container);
+            }
+            let linkBadge = el.querySelector(".palette-link-badge");
+            if (item.palette_source_id) {
+                if (!linkBadge) {
+                    linkBadge = document.createElement("div");
+                    linkBadge.className = "palette-link-badge";
+                    el.appendChild(linkBadge);
+                }
+                linkBadge.innerText = "🔗";
+                linkBadge.title = `Linked to ${item.palette_source_id}`;
+            } else if (linkBadge) {
+                linkBadge.remove();
+            }
+            const sourceItem = this.boardData.items.find(i => i.id === item.palette_source_id);
+            const palettePosition = sourceItem?.palette_position || "left";
+            container.classList.toggle("left-position", palettePosition === "left");
+            container.classList.toggle("bottom-position", palettePosition !== "left");
+            const colors = item.palette_data || [];
+
+            if (sourceItem) {
+                if (palettePosition === "left") {
+                    item.w = 170;
+                    item.h = Math.max(170, colors.length * 66);
+                } else {
+                    item.w = Math.max(170, colors.length * 66);
+                    item.h = 170;
+                }
+                const position = this.getPaletteWidgetPosition(sourceItem, item.w, item.h);
+                item.x = position.x;
+                item.y = position.y;
+                el.style.left = `${item.x}px`;
+                el.style.top = `${item.y}px`;
+                el.style.width = `${item.w}px`;
+                el.style.height = `${item.h}px`;
+            }
+
+            container.innerHTML = "";
+            colors.forEach(hex => {
+                const pill = document.createElement("div");
+                pill.className = "palette-color";
+                pill.style.backgroundColor = hex;
+                pill.style.color = this.getContrastColor(hex);
+                pill.innerText = hex.toUpperCase();
+                pill.title = `Click to copy: ${hex}`;
+                pill.onmousedown = (e) => e.stopPropagation();
+                pill.onclick = async (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const success = await this.copyToClipboard(hex.toUpperCase());
+                    if (success) this.showCopyFeedback(pill);
+                };
+                container.appendChild(pill);
+            });
             
         } else if (item.type === "note") {
             el.classList.add("note-item");
@@ -894,13 +1030,29 @@ class StoryboardWorkspace {
                 content.className = "note-content";
                 el.appendChild(content);
             }
-            content.innerText = item.content || "";
+            content.contentEditable = !item.pinned;
+            content.spellcheck = false;
+            if (content.innerText !== (item.content || "")) {
+                content.innerText = item.content || "";
+            }
+            content.onmousedown = (e) => e.stopPropagation();
+            content.oninput = () => {
+                item.content = content.innerText;
+            };
+            content.onblur = () => {
+                item.content = content.innerText;
+                this.saveBoard();
+            };
             
+            const style = item.note_style || {};
             const textLength = (item.content || "").length;
             const area = item.w * item.h;
-            let fontSize = Math.sqrt(area / (textLength || 1)) * 0.8;
+            let fontSize = style.font_size || (Math.sqrt(area / (textLength || 1)) * 0.8);
             fontSize = Math.max(12, Math.min(fontSize, item.h * 0.5));
             content.style.fontSize = `${fontSize}px`;
+            content.style.fontFamily = style.font_family || "'Roboto', sans-serif";
+            content.style.fontWeight = style.font_weight || "700";
+            content.style.textAlign = style.text_align || "center";
             
         } else if (item.type === "frame") {
             el.classList.add("frame-item");
@@ -929,6 +1081,26 @@ class StoryboardWorkspace {
             el.appendChild(paletteBar);
         }
 
+        if (item.palette_hidden) {
+            paletteBar.style.display = "none";
+            return;
+        }
+
+        const framePalettePosition = item.palette_position || "bottom";
+        if (framePalettePosition === "left") {
+            paletteBar.dataset.position = "left";
+            paletteBar.style.left = "-14px";
+            paletteBar.style.bottom = "50%";
+            paletteBar.style.transform = "translate(-100%, 50%)";
+            paletteBar.style.flexDirection = "column";
+        } else {
+            paletteBar.dataset.position = "bottom";
+            paletteBar.style.left = "50%";
+            paletteBar.style.bottom = "-170px";
+            paletteBar.style.transform = "translateX(-50%)";
+            paletteBar.style.flexDirection = "row";
+        }
+
         // Use a small timeout to ensure boardData is updated if this was called from a move
         const imagesInFrame = this.boardData.items
             .filter(it => it.type === "image" && it.image_ref &&
@@ -941,7 +1113,8 @@ class StoryboardWorkspace {
             .sort()
             .join(",");
 
-        const cacheKey = `${item.id}_${containedImageIds}`;
+        const paletteCount = item.palette_colors || 8;
+        const cacheKey = `${item.id}_${paletteCount}_${containedImageIds}`;
         const cached = this.paletteCache.get(item.id);
 
         if (cached && cached.key === cacheKey) {
@@ -961,7 +1134,7 @@ class StoryboardWorkspace {
         paletteBar.style.display = "flex";
         this.paletteLoading.add(item.id);
         try {
-            const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/${item.id}`);
+            const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/${item.id}?num_colors=${paletteCount}`);
             const { colors } = await response.json();
             if (colors && colors.length > 0) {
                 this.paletteCache.set(item.id, { key: cacheKey, colors });
@@ -977,47 +1150,55 @@ class StoryboardWorkspace {
         }
     }
 
-    async copyToClipboard(text) {
-        console.log("Copying to clipboard:", text);
-        
-        // Method 1: Modern Async Clipboard API
-        if (navigator.clipboard && window.isSecureContext) {
-            try {
-                await navigator.clipboard.writeText(text);
-                return true;
-            } catch (err) {
-                console.warn("Async clipboard failed, trying fallback:", err);
-            }
+    updateImagePalette(el, item) {
+        let paletteBar = el.querySelector(".image-palette-bar");
+        if (!paletteBar) {
+            paletteBar = document.createElement("div");
+            paletteBar.className = "image-palette-bar";
+            el.appendChild(paletteBar);
         }
 
-        // Method 2: Legacy execCommand('copy')
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-9999px";
-        textArea.style.top = "0";
-        textArea.style.opacity = "0";
-        document.body.appendChild(textArea);
-        
-        // Save current focus
-        const activeEl = document.activeElement;
-        
-        textArea.focus();
-        textArea.select();
-        
-        let success = false;
-        try {
-            success = document.execCommand('copy');
-        } catch (err) {
-            console.error("Legacy copy failed:", err);
+        const colors = item.image_palette || [];
+        if (!item.image_palette_visible || !colors.length) {
+            paletteBar.style.display = "none";
+            return;
         }
-        
-        document.body.removeChild(textArea);
-        
-        // Restore focus
-        if (activeEl) activeEl.focus();
-        
-        return success;
+
+        const palettePosition = item.palette_position || "left";
+        if (palettePosition === "left") {
+            paletteBar.dataset.position = "left";
+            paletteBar.style.left = "-14px";
+            paletteBar.style.bottom = "50%";
+            paletteBar.style.transform = "translate(-100%, 50%)";
+            paletteBar.style.flexDirection = "column";
+        } else {
+            paletteBar.dataset.position = "bottom";
+            paletteBar.style.left = "50%";
+            paletteBar.style.bottom = "-170px";
+            paletteBar.style.transform = "translateX(-50%)";
+            paletteBar.style.flexDirection = "row";
+        }
+
+        paletteBar.style.display = "flex";
+        this.renderPaletteColors(paletteBar, colors);
+    }
+
+    async loadImagePalette(item) {
+        const paletteCount = item.palette_colors || 8;
+        const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/image/${item.id}?num_colors=${paletteCount}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const result = await response.json();
+        if (!result.colors || !result.colors.length) return false;
+        item.image_palette = result.colors;
+        item.image_palette_count = paletteCount;
+        return true;
+    }
+
+    async copyToClipboard(text) {
+        console.log("Copying to clipboard:", text);
+        return copyTextToClipboard(text);
     }
 
     renderPaletteColors(bar, colors) {
@@ -1031,48 +1212,30 @@ class StoryboardWorkspace {
             const span = document.createElement("span");
             span.innerText = c.toUpperCase();
             dot.appendChild(span);
+
+            // Prevent frame/item drag handlers from stealing this interaction.
+            dot.onmousedown = (e) => {
+                e.stopPropagation();
+            };
+            dot.onpointerdown = (e) => {
+                e.stopPropagation();
+            };
             
             dot.title = `Click to copy: ${c}`;
             dot.onclick = async (e) => {
                 e.stopPropagation();
+                e.preventDefault();
                 const text = c.toUpperCase();
                 
                 console.log("Color clicked:", text);
                 
-                // Final ultra-robust copy method
-                let success = false;
-                
-                // 1. Try modern clipboard API
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    try {
-                        await navigator.clipboard.writeText(text);
-                        success = true;
-                    } catch (err) {
-                        console.warn("Async clipboard failed, trying fallback");
-                    }
-                }
-
-                // 2. Try legacy fallback if needed
-                if (!success) {
-                    const textArea = document.createElement("textarea");
-                    textArea.value = text;
-                    textArea.style.position = "fixed";
-                    textArea.style.left = "-9999px";
-                    textArea.style.top = "0";
-                    document.body.appendChild(textArea);
-                    textArea.focus();
-                    textArea.select();
-                    try {
-                        success = document.execCommand('copy');
-                    } catch (err) {
-                        console.error("Fallback copy failed");
-                    }
-                    document.body.removeChild(textArea);
-                }
+                const success = await this.copyToClipboard(text);
 
                 if (success) {
                     console.log("Copy success!");
                     this.showCopyFeedback(dot);
+                } else {
+                    console.warn(`Copy failed for ${text}`);
                 }
             };
             bar.appendChild(dot);
@@ -1083,6 +1246,81 @@ class StoryboardWorkspace {
         const originalTransform = el.style.transform;
         el.style.transform = "scale(1.2)";
         setTimeout(() => el.style.transform = originalTransform, 200);
+    }
+
+    getPaletteWidgetPosition(sourceItem, paletteWidth, paletteHeight) {
+        const position = sourceItem.palette_position || "left";
+        if (position === "bottom") {
+            return {
+                x: sourceItem.x + (sourceItem.w - paletteWidth) / 2,
+                y: sourceItem.y + sourceItem.h + 20
+            };
+        }
+        return {
+            x: sourceItem.x - paletteWidth - 20,
+            y: sourceItem.y + (sourceItem.h - paletteHeight) / 2
+        };
+    }
+
+    autoArrangeFrame(frame) {
+        if (!frame || frame.type !== "frame") return;
+
+        const margin = 24;
+        const gap = 20;
+        const itemsInFrame = this.boardData.items.filter(it => {
+            if (it.id === frame.id || it.type === "frame") return false;
+            const cx = it.x + it.w / 2;
+            const cy = it.y + it.h / 2;
+            return (
+                cx >= frame.x &&
+                cy >= frame.y &&
+                cx <= (frame.x + frame.w) &&
+                cy <= (frame.y + frame.h)
+            );
+        }).sort((a, b) => {
+            if (Math.abs(a.y - b.y) > 10) return a.y - b.y;
+            return a.x - b.x;
+        });
+
+        if (!itemsInFrame.length) return;
+
+        const count = itemsInFrame.length;
+        const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+        const rows = Math.ceil(count / cols);
+        const colWidths = Array(cols).fill(0);
+        const rowHeights = Array(rows).fill(0);
+
+        itemsInFrame.forEach((it, idx) => {
+            const col = idx % cols;
+            const row = Math.floor(idx / cols);
+            colWidths[col] = Math.max(colWidths[col], it.w);
+            rowHeights[row] = Math.max(rowHeights[row], it.h);
+        });
+
+        const xOffsets = [];
+        const yOffsets = [];
+        let cursorX = frame.x + margin;
+        for (let c = 0; c < cols; c++) {
+            xOffsets.push(cursorX);
+            cursorX += colWidths[c] + gap;
+        }
+        let cursorY = frame.y + margin;
+        for (let r = 0; r < rows; r++) {
+            yOffsets.push(cursorY);
+            cursorY += rowHeights[r] + gap;
+        }
+
+        itemsInFrame.forEach((it, idx) => {
+            const col = idx % cols;
+            const row = Math.floor(idx / cols);
+            it.x = xOffsets[col] + (colWidths[col] - it.w) / 2;
+            it.y = yOffsets[row] + (rowHeights[row] - it.h) / 2;
+        });
+
+        const contentW = colWidths.reduce((sum, w) => sum + w, 0) + ((cols - 1) * gap);
+        const contentH = rowHeights.reduce((sum, h) => sum + h, 0) + ((rows - 1) * gap);
+        frame.w = (margin * 2) + contentW;
+        frame.h = (margin * 2) + contentH;
     }
 
     renderInspector() {
@@ -1177,10 +1415,7 @@ class StoryboardWorkspace {
             };
 
             document.getElementById("action-delete-selected").onclick = () => {
-                this.boardData.items = this.boardData.items.filter(i => !this.boardData.selection.includes(i.id));
-                this.boardData.selection = [];
-                this.renderBoard();
-                this.saveBoard();
+                this.removeSelectedItems();
             };
             return;
         }
@@ -1218,7 +1453,7 @@ class StoryboardWorkspace {
             return html;
         };
 
-        if (item.type === "image" || item.type === "slot") {
+        if (item.type === "image" || item.type === "slot" || item.type === "palette") {
             fields += `
                 <div class="inspector-field">
                     <label>Label</label>
@@ -1229,19 +1464,85 @@ class StoryboardWorkspace {
                     <input type="text" id="inspector-tags" value="${(item.tags || []).join(", ")}">
                 </div>
             `;
+            if (item.type === "image") {
+                const imagePaletteColors = item.palette_colors || 8;
+                const imagePalettePosition = item.palette_position || "left";
+                fields += `
+                    <div class="inspector-field">
+                        <label>Image Palette Colors</label>
+                        <select id="inspector-image-palette-colors">
+                            <option value="4" ${imagePaletteColors === 4 ? "selected" : ""}>4</option>
+                            <option value="8" ${imagePaletteColors === 8 ? "selected" : ""}>8</option>
+                            <option value="12" ${imagePaletteColors === 12 ? "selected" : ""}>12</option>
+                            <option value="16" ${imagePaletteColors === 16 ? "selected" : ""}>16</option>
+                        </select>
+                    </div>
+                    <div class="inspector-field">
+                        <label>Image Palette Position</label>
+                        <select id="inspector-image-palette-position">
+                            <option value="left" ${imagePalettePosition === "left" ? "selected" : ""}>Left Center</option>
+                            <option value="bottom" ${imagePalettePosition === "bottom" ? "selected" : ""}>Bottom Center</option>
+                        </select>
+                    </div>
+                `;
+            }
         } else if (item.type === "frame") {
+            const framePaletteColors = item.palette_colors || 8;
+            const framePalettePosition = item.palette_position || "bottom";
             fields += `
                 <div class="inspector-field">
                     <label>Label</label>
                     <input type="text" id="inspector-label" value="${item.label || ""}">
                 </div>
+                <div class="inspector-field">
+                    <label>Frame Palette Colors</label>
+                    <select id="inspector-frame-palette-colors">
+                        <option value="4" ${framePaletteColors === 4 ? "selected" : ""}>4</option>
+                        <option value="8" ${framePaletteColors === 8 ? "selected" : ""}>8</option>
+                        <option value="12" ${framePaletteColors === 12 ? "selected" : ""}>12</option>
+                        <option value="16" ${framePaletteColors === 16 ? "selected" : ""}>16</option>
+                    </select>
+                </div>
+                <div class="inspector-field">
+                    <label>Frame Palette Position</label>
+                    <select id="inspector-frame-palette-position">
+                        <option value="bottom" ${framePalettePosition === "bottom" ? "selected" : ""}>Bottom Center</option>
+                        <option value="left" ${framePalettePosition === "left" ? "selected" : ""}>Left Center</option>
+                    </select>
+                </div>
                 ${createColorPicker(item.color || "#4CAF50")}
             `;
         } else if (item.type === "note") {
+            const noteStyle = item.note_style || {};
             fields += `
                 <div class="inspector-field">
                     <label>Content</label>
                     <textarea id="inspector-content-text" rows="5">${item.content || ""}</textarea>
+                </div>
+                <div class="inspector-field">
+                    <label>Font Family</label>
+                    <input type="text" id="inspector-note-font-family" value="${noteStyle.font_family || "Roboto, sans-serif"}">
+                </div>
+                <div class="inspector-field">
+                    <label>Font Size</label>
+                    <input type="number" id="inspector-note-font-size" min="12" max="300" value="${noteStyle.font_size || ""}" placeholder="Auto">
+                </div>
+                <div class="inspector-field">
+                    <label>Font Weight</label>
+                    <select id="inspector-note-font-weight">
+                        <option value="400" ${(noteStyle.font_weight || "700") === "400" ? "selected" : ""}>400</option>
+                        <option value="500" ${(noteStyle.font_weight || "700") === "500" ? "selected" : ""}>500</option>
+                        <option value="700" ${(noteStyle.font_weight || "700") === "700" ? "selected" : ""}>700</option>
+                        <option value="900" ${(noteStyle.font_weight || "700") === "900" ? "selected" : ""}>900</option>
+                    </select>
+                </div>
+                <div class="inspector-field">
+                    <label>Text Align</label>
+                    <select id="inspector-note-text-align">
+                        <option value="left" ${(noteStyle.text_align || "center") === "left" ? "selected" : ""}>Left</option>
+                        <option value="center" ${(noteStyle.text_align || "center") === "center" ? "selected" : ""}>Center</option>
+                        <option value="right" ${(noteStyle.text_align || "center") === "right" ? "selected" : ""}>Right</option>
+                    </select>
                 </div>
                 ${createColorPicker(item.color || "#ffeb3b")}
             `;
@@ -1252,6 +1553,10 @@ class StoryboardWorkspace {
                 <button id="action-copy">Copy to Clipboard</button>
                 <button id="action-front">Bring to Front</button>
                 <button id="action-back">Send to Back</button>
+                <button id="action-pin-toggle">${item.pinned ? "Unpin Item" : "Pin Item"}</button>
+                ${item.type === "frame" ? `<button id="action-toggle-palette">${item.palette_hidden ? "Show Palette" : "Hide Palette"}</button>` : ""}
+                ${item.type === "image" ? `<button id="action-toggle-image-palette">${item.image_palette_visible ? "Hide Palette" : "Show Palette"}</button>` : ""}
+                ${item.type === "frame" ? '<button id="action-auto-layout">Auto Arrange In Frame</button>' : ""}
                 <button id="action-delete" class="danger">Delete Item</button>
             </div>
         `;
@@ -1295,13 +1600,77 @@ class StoryboardWorkspace {
         };
 
         document.getElementById("action-delete").onclick = () => {
+            if (item.pinned) return;
             this.boardData.items = this.boardData.items.filter(i => i.id !== item.id);
             this.boardData.selection = [];
             this.renderBoard();
             this.saveBoard();
         };
 
-        if (item.type === "image" || item.type === "slot") {
+        const pinToggleButton = document.getElementById("action-pin-toggle");
+        if (pinToggleButton) {
+            pinToggleButton.onclick = () => {
+                item.pinned = !item.pinned;
+                this.renderBoard();
+                this.saveBoard();
+            };
+        }
+
+        const togglePaletteButton = document.getElementById("action-toggle-palette");
+        if (togglePaletteButton) {
+            togglePaletteButton.onclick = () => {
+                item.palette_hidden = !item.palette_hidden;
+                this.renderBoard();
+                this.saveBoard();
+            };
+        }
+
+        const toggleImagePaletteButton = document.getElementById("action-toggle-image-palette");
+        if (toggleImagePaletteButton) {
+            toggleImagePaletteButton.onclick = async () => {
+                if (item.image_palette_visible) {
+                    item.image_palette_visible = false;
+                    this.renderBoard();
+                    this.saveBoard();
+                    return;
+                }
+
+                const paletteCount = item.palette_colors || 8;
+                if (item.image_palette && item.image_palette.length && item.image_palette_count === paletteCount) {
+                    item.image_palette_visible = true;
+                    this.renderBoard();
+                    this.saveBoard();
+                    return;
+                }
+
+                try {
+                    const ok = await this.loadImagePalette(item);
+                    if (ok) {
+                        item.image_palette_visible = true;
+                        this.renderBoard();
+                        this.saveBoard();
+                    } else {
+                        alert("No palette colors found for this image.");
+                    }
+                } catch (err) {
+                    console.error("Show Palette failed:", err);
+                    alert("Show Palette failed. Check server logs and retry.");
+                }
+            };
+        }
+
+        const autoLayoutButton = document.getElementById("action-auto-layout");
+        if (autoLayoutButton) {
+            autoLayoutButton.onclick = () => {
+                this.autoArrangeFrame(item);
+                this.renderBoard();
+                this.saveBoard();
+                const frameEl = this.itemElements.get(item.id);
+                if (frameEl) this.updateFramePalette(frameEl, item);
+            };
+        }
+
+        if (item.type === "image" || item.type === "slot" || item.type === "palette") {
             document.getElementById("inspector-label").onchange = (e) => {
                 item.label = e.target.value;
                 this.saveBoard();
@@ -1311,18 +1680,86 @@ class StoryboardWorkspace {
                 item.tags = e.target.value.split(",").map(s => s.trim()).filter(s => s);
                 this.saveBoard();
             };
+
+            if (item.type === "image") {
+                const imagePaletteSelect = document.getElementById("inspector-image-palette-colors");
+                if (imagePaletteSelect) {
+                    imagePaletteSelect.onchange = async (e) => {
+                        item.palette_colors = parseInt(e.target.value, 10) || 8;
+                        if (item.image_palette_visible) {
+                            try {
+                                const ok = await this.loadImagePalette(item);
+                                if (!ok) alert("No palette colors found for this image.");
+                            } catch (err) {
+                                console.error("Palette refresh failed:", err);
+                                alert("Palette refresh failed. Check server logs and retry.");
+                            }
+                            this.renderBoard();
+                        } else {
+                            item.image_palette = null;
+                            item.image_palette_count = null;
+                        }
+                        this.saveBoard();
+                    };
+                }
+                const imagePalettePositionSelect = document.getElementById("inspector-image-palette-position");
+                if (imagePalettePositionSelect) {
+                    imagePalettePositionSelect.onchange = (e) => {
+                        item.palette_position = e.target.value;
+                        this.renderBoard();
+                        this.saveBoard();
+                    };
+                }
+
+            }
         } else if (item.type === "frame") {
             document.getElementById("inspector-label").onchange = (e) => {
                 item.label = e.target.value;
                 this.renderBoard();
                 this.saveBoard();
             };
+            const framePaletteSelect = document.getElementById("inspector-frame-palette-colors");
+            if (framePaletteSelect) {
+                framePaletteSelect.onchange = () => {
+                    item.palette_colors = parseInt(framePaletteSelect.value, 10) || 8;
+                    this.paletteCache.delete(item.id);
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
+            const framePalettePositionSelect = document.getElementById("inspector-frame-palette-position");
+            if (framePalettePositionSelect) {
+                framePalettePositionSelect.onchange = () => {
+                    item.palette_position = framePalettePositionSelect.value;
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
         } else if (item.type === "note") {
             document.getElementById("inspector-content-text").onchange = (e) => {
                 item.content = e.target.value;
                 this.renderBoard();
                 this.saveBoard();
             };
+            item.note_style = item.note_style || {};
+            const bindTypography = (id, key, castFn = (v) => v) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.onchange = () => {
+                    const value = castFn(el.value);
+                    if (value === "" || value === null || Number.isNaN(value)) {
+                        delete item.note_style[key];
+                    } else {
+                        item.note_style[key] = value;
+                    }
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            };
+            bindTypography("inspector-note-font-family", "font_family");
+            bindTypography("inspector-note-font-size", "font_size", (v) => v ? parseInt(v, 10) : "");
+            bindTypography("inspector-note-font-weight", "font_weight");
+            bindTypography("inspector-note-text-align", "text_align");
         }
 
         // Color handling for both frame and note
@@ -1361,6 +1798,14 @@ class StoryboardWorkspace {
         window.addEventListener("click", (e) => {
             if (this.contextMenu && !this.contextMenu.contains(e.target)) {
                 this.contextMenu.style.display = "none";
+            }
+        });
+
+        // Exit inline note editing when user clicks outside note text.
+        window.addEventListener("mousedown", (e) => {
+            const activeEl = document.activeElement;
+            if (activeEl?.classList?.contains("note-content") && !activeEl.contains(e.target)) {
+                activeEl.blur();
             }
         });
 
@@ -1430,15 +1875,15 @@ class StoryboardWorkspace {
                     
                     const result = await response.json();
                     if (result.filename) {
-                        this.boardData.items.push({
-                            id: this.generateUUID(),
-                            type: "image",
+                        this.boardData.items.push(createImageItem({
                             x: -this.offset.x / this.scale + 100,
                             y: -this.offset.y / this.scale + 100,
-                            w: 512,
-                            h: 512,
-                            image_ref: result.filename
-                        });
+                            imageRef: result.filename,
+                            label: "Pasted Image",
+                            imageWidth: result.width,
+                            imageHeight: result.height,
+                            generateId: () => this.generateUUID()
+                        }));
                         this.renderBoard();
                         await this.saveBoard();
                     }
@@ -1467,15 +1912,15 @@ class StoryboardWorkspace {
                     
                     const result = await response.json();
                     if (result.filename) {
-                        this.boardData.items.push({
-                            id: this.generateUUID(),
-                            type: "image",
+                        this.boardData.items.push(createImageItem({
                             x: mouseX,
                             y: mouseY,
-                            w: 512,
-                            h: 512,
-                            image_ref: result.filename
-                        });
+                            imageRef: result.filename,
+                            label: file.name || "Dropped Image",
+                            imageWidth: result.width,
+                            imageHeight: result.height,
+                            generateId: () => this.generateUUID()
+                        }));
                         this.renderBoard();
                         await this.saveBoard();
                     }
@@ -1526,6 +1971,16 @@ class StoryboardWorkspace {
         if (this.boardData.selection.length > 0) {
             this.contextMenu.appendChild(createButton("Bring to Front", () => document.getElementById("action-front")?.click()));
             this.contextMenu.appendChild(createButton("Send to Back", () => document.getElementById("action-back")?.click()));
+            const selectedItems = this.boardData.selection
+                .map(id => this.boardData.items.find(i => i.id === id))
+                .filter(Boolean);
+            const anyPinned = selectedItems.some(i => i.pinned);
+            const pinLabel = anyPinned ? "Unpin Selected" : "Pin Selected";
+            this.contextMenu.appendChild(createButton(pinLabel, () => {
+                selectedItems.forEach(i => i.pinned = !anyPinned);
+                this.renderBoard();
+                this.saveBoard();
+            }));
             
             if (this.boardData.selection.length === 1) {
                 const item = this.boardData.items.find(i => i.id === this.boardData.selection[0]);

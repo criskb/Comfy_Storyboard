@@ -1,5 +1,7 @@
 # ComfyUI Storyboard Workspace
 
+![ComfyUI Storyboard Banner](assets/storyboard_banner.svg)
+
 A PureRef-inspired storyboard and reference board for ComfyUI. This extension provides an infinite canvas where you can collect references, organize shots, and target generations directly into placeholders.
 
 ## Features
@@ -50,3 +52,7 @@ Creates named empty placeholders in the board.
 3. Drag in some images or add a **Slot**.
 4. Use **Storyboard Send** in your generation pipe to target your board items.
 5. Use **Storyboard Read** to feed board items into other nodes.
+
+---
+
+![ComfyUI Storyboard Signature](assets/storyboard_sig_icon.svg)
