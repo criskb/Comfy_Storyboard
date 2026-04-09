@@ -93,8 +93,10 @@ class StoryboardAPI:
             image = post.get("image")
             
             if image:
-                filename = store.add_asset(board_id, Image.open(image.file))
-                return web.json_response({"filename": filename})
+                pil_image = Image.open(image.file)
+                width, height = pil_image.size
+                filename = store.add_asset(board_id, pil_image)
+                return web.json_response({"filename": filename, "width": width, "height": height})
             
             return web.Response(status=400)
 
