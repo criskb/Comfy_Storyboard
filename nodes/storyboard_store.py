@@ -256,7 +256,7 @@ class StoryboardStore:
         canvas.save(os.path.join(assets_path, filename))
         return filename
 
-    def get_frame_palette(self, board_id, frame_id, num_colors=8):
+    def get_frame_palette(self, board_id, frame_id, num_colors=12):
         board_data = self.get_board(board_id)
         frame = next((i for i in board_data["items"] if i["id"] == frame_id), None)
         if not frame or frame["type"] != "frame":
