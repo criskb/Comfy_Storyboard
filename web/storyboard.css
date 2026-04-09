@@ -636,6 +636,7 @@
 .storyboard-item.note-item {
     background: #ffeb3b;
     color: #333;
+    border-color: transparent;
     padding: 20px;
     box-shadow: 2px 2px 10px rgba(0,0,0,0.3);
     border-radius: var(--storyboard-item-radius);
@@ -643,6 +644,16 @@
     justify-content: center;
     align-items: center;
     text-align: center;
+}
+
+.storyboard-item.note-item:hover {
+    border-color: transparent;
+    box-shadow: 2px 2px 10px rgba(0,0,0,0.3), 0 0 0 4px rgba(255, 255, 255, 0.6);
+}
+
+.storyboard-item.note-item.selected {
+    border-color: transparent;
+    box-shadow: 2px 2px 10px rgba(0,0,0,0.3), 0 0 0 4px #2196F3;
 }
 
 .note-meta {
