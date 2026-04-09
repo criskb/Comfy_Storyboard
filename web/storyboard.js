@@ -1,5 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { createImageItem } from "./storyboard_item_utils.js";
+import { copyTextToClipboard } from "./storyboard_clipboard.js";
 
 // Load CSS
 const link = document.createElement("link");
@@ -57,6 +59,7 @@ class StoryboardWorkspace {
         this.paletteLoading = new Set(); // frameIds currently fetching
         this.internalClipboard = [];
         this.needsReload = false;
+        this.inspectorOpen = false;
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
@@ -140,20 +143,28 @@ class StoryboardWorkspace {
             <div id="inspector-content">Select an item to see details</div>
         `;
 
+        this.inspectorToggle = document.createElement("button");
+        this.inspectorToggle.className = "storyboard-inspector-toggle";
+        this.inspectorToggle.title = "Open Inspector";
+        this.inspectorToggle.innerText = "☰";
+        this.inspectorToggle.onclick = () => this.setInspectorOpen(!this.inspectorOpen);
+
         this.canvasContainer.appendChild(this.canvas);
         main.appendChild(this.canvasContainer);
         main.appendChild(this.inspector);
+        main.appendChild(this.inspectorToggle);
         
         const footer = document.createElement("div");
         footer.className = "storyboard-footer";
+        footer.classList.add("storyboard-floating-prompt");
         footer.innerHTML = `
             <textarea id="storyboard-prompt" placeholder="Enter prompt..."></textarea>
             <button id="storyboard-queue">Queue Prompt</button>
         `;
 
         this.window.appendChild(header);
+        this.canvasContainer.appendChild(footer);
         this.window.appendChild(main);
-        this.window.appendChild(footer);
         
         this.contextMenu = document.createElement("div");
         this.contextMenu.className = "storyboard-context-menu";
@@ -269,6 +280,14 @@ class StoryboardWorkspace {
         };
 
         this.setupInteractions();
+        this.setInspectorOpen(false);
+    }
+
+    setInspectorOpen(open) {
+        this.inspectorOpen = open;
+        this.inspector.classList.toggle("closed", !open);
+        this.inspectorToggle.innerText = open ? "✕" : "☰";
+        this.inspectorToggle.title = open ? "Close Inspector" : "Open Inspector";
     }
 
     async show(boardId, node) {
@@ -380,7 +399,6 @@ class StoryboardWorkspace {
             return v.toString(16);
         });
     }
-
     renderBoard() {
         // Track which items are current to remove old ones later
         const currentItemIds = new Set(this.boardData.items.map(i => i.id));
@@ -777,7 +795,8 @@ class StoryboardWorkspace {
                 method: "POST",
                 body: formData
             });
-            const { filename } = await response.json();
+            const result = await response.json();
+            const { filename, width, height } = result;
             
             if (filename) {
                 // Find a good place to paste (e.g. center of viewport)
@@ -785,16 +804,17 @@ class StoryboardWorkspace {
                 const centerX = (viewport.width / 2 - this.offset.x) / this.scale;
                 const centerY = (viewport.height / 2 - this.offset.y) / this.scale;
                 
-                const newItem = {
-                    id: this.generateUUID(),
-                    type: "image",
-                    x: centerX - 256,
-                    y: centerY - 256,
-                    w: 512,
-                    h: 512,
-                    image_ref: filename,
-                    label: "Pasted Image"
-                };
+                const newItem = createImageItem({
+                    x: centerX,
+                    y: centerY,
+                    imageRef: filename,
+                    label: "Pasted Image",
+                    imageWidth: width,
+                    imageHeight: height,
+                    generateId: () => this.generateUUID()
+                });
+                newItem.x -= newItem.w / 2;
+                newItem.y -= newItem.h / 2;
                 this.boardData.items.push(newItem);
                 this.boardData.selection = [newItem.id];
                 this.renderBoard();
@@ -979,45 +999,7 @@ class StoryboardWorkspace {
 
     async copyToClipboard(text) {
         console.log("Copying to clipboard:", text);
-        
-        // Method 1: Modern Async Clipboard API
-        if (navigator.clipboard && window.isSecureContext) {
-            try {
-                await navigator.clipboard.writeText(text);
-                return true;
-            } catch (err) {
-                console.warn("Async clipboard failed, trying fallback:", err);
-            }
-        }
-
-        // Method 2: Legacy execCommand('copy')
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-9999px";
-        textArea.style.top = "0";
-        textArea.style.opacity = "0";
-        document.body.appendChild(textArea);
-        
-        // Save current focus
-        const activeEl = document.activeElement;
-        
-        textArea.focus();
-        textArea.select();
-        
-        let success = false;
-        try {
-            success = document.execCommand('copy');
-        } catch (err) {
-            console.error("Legacy copy failed:", err);
-        }
-        
-        document.body.removeChild(textArea);
-        
-        // Restore focus
-        if (activeEl) activeEl.focus();
-        
-        return success;
+        return copyTextToClipboard(text);
     }
 
     renderPaletteColors(bar, colors) {
@@ -1031,48 +1013,30 @@ class StoryboardWorkspace {
             const span = document.createElement("span");
             span.innerText = c.toUpperCase();
             dot.appendChild(span);
+
+            // Prevent frame/item drag handlers from stealing this interaction.
+            dot.onmousedown = (e) => {
+                e.stopPropagation();
+            };
+            dot.onpointerdown = (e) => {
+                e.stopPropagation();
+            };
             
             dot.title = `Click to copy: ${c}`;
             dot.onclick = async (e) => {
                 e.stopPropagation();
+                e.preventDefault();
                 const text = c.toUpperCase();
                 
                 console.log("Color clicked:", text);
                 
-                // Final ultra-robust copy method
-                let success = false;
-                
-                // 1. Try modern clipboard API
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    try {
-                        await navigator.clipboard.writeText(text);
-                        success = true;
-                    } catch (err) {
-                        console.warn("Async clipboard failed, trying fallback");
-                    }
-                }
-
-                // 2. Try legacy fallback if needed
-                if (!success) {
-                    const textArea = document.createElement("textarea");
-                    textArea.value = text;
-                    textArea.style.position = "fixed";
-                    textArea.style.left = "-9999px";
-                    textArea.style.top = "0";
-                    document.body.appendChild(textArea);
-                    textArea.focus();
-                    textArea.select();
-                    try {
-                        success = document.execCommand('copy');
-                    } catch (err) {
-                        console.error("Fallback copy failed");
-                    }
-                    document.body.removeChild(textArea);
-                }
+                const success = await this.copyToClipboard(text);
 
                 if (success) {
                     console.log("Copy success!");
                     this.showCopyFeedback(dot);
+                } else {
+                    console.warn(`Copy failed for ${text}`);
                 }
             };
             bar.appendChild(dot);
@@ -1083,6 +1047,58 @@ class StoryboardWorkspace {
         const originalTransform = el.style.transform;
         el.style.transform = "scale(1.2)";
         setTimeout(() => el.style.transform = originalTransform, 200);
+    }
+
+    autoArrangeFrame(frame) {
+        if (!frame || frame.type !== "frame") return;
+
+        const margin = 24;
+        const gap = 20;
+        const itemsInFrame = this.boardData.items.filter(it => {
+            if (it.id === frame.id || it.type === "frame") return false;
+            const cx = it.x + it.w / 2;
+            const cy = it.y + it.h / 2;
+            return (
+                cx >= frame.x &&
+                cy >= frame.y &&
+                cx <= (frame.x + frame.w) &&
+                cy <= (frame.y + frame.h)
+            );
+        });
+
+        if (!itemsInFrame.length) return;
+
+        const count = itemsInFrame.length;
+        const totalArea = itemsInFrame.reduce((sum, it) => sum + (it.w * it.h), 0);
+        const avgArea = totalArea / count;
+        const cellBase = Math.max(140, Math.min(280, Math.sqrt(avgArea)));
+
+        const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+        const rows = Math.ceil(count / cols);
+
+        itemsInFrame.forEach((it, idx) => {
+            const aspect = Math.max(0.05, (it.w || 1) / Math.max(1, it.h || 1));
+            let targetW = cellBase;
+            let targetH = cellBase;
+            if (aspect >= 1) {
+                targetH = targetW / aspect;
+            } else {
+                targetW = targetH * aspect;
+            }
+
+            const col = idx % cols;
+            const row = Math.floor(idx / cols);
+            const cellX = frame.x + margin + col * (cellBase + gap);
+            const cellY = frame.y + margin + row * (cellBase + gap);
+
+            it.w = Math.max(50, targetW);
+            it.h = Math.max(50, targetH);
+            it.x = cellX + (cellBase - it.w) / 2;
+            it.y = cellY + (cellBase - it.h) / 2;
+        });
+
+        frame.w = (margin * 2) + (cols * cellBase) + ((cols - 1) * gap);
+        frame.h = (margin * 2) + (rows * cellBase) + ((rows - 1) * gap);
     }
 
     renderInspector() {
@@ -1252,6 +1268,7 @@ class StoryboardWorkspace {
                 <button id="action-copy">Copy to Clipboard</button>
                 <button id="action-front">Bring to Front</button>
                 <button id="action-back">Send to Back</button>
+                ${item.type === "frame" ? '<button id="action-auto-layout">Auto Arrange In Frame</button>' : ""}
                 <button id="action-delete" class="danger">Delete Item</button>
             </div>
         `;
@@ -1300,6 +1317,17 @@ class StoryboardWorkspace {
             this.renderBoard();
             this.saveBoard();
         };
+
+        const autoLayoutButton = document.getElementById("action-auto-layout");
+        if (autoLayoutButton) {
+            autoLayoutButton.onclick = () => {
+                this.autoArrangeFrame(item);
+                this.renderBoard();
+                this.saveBoard();
+                const frameEl = this.itemElements.get(item.id);
+                if (frameEl) this.updateFramePalette(frameEl, item);
+            };
+        }
 
         if (item.type === "image" || item.type === "slot") {
             document.getElementById("inspector-label").onchange = (e) => {
@@ -1430,15 +1458,15 @@ class StoryboardWorkspace {
                     
                     const result = await response.json();
                     if (result.filename) {
-                        this.boardData.items.push({
-                            id: this.generateUUID(),
-                            type: "image",
+                        this.boardData.items.push(createImageItem({
                             x: -this.offset.x / this.scale + 100,
                             y: -this.offset.y / this.scale + 100,
-                            w: 512,
-                            h: 512,
-                            image_ref: result.filename
-                        });
+                            imageRef: result.filename,
+                            label: "Pasted Image",
+                            imageWidth: result.width,
+                            imageHeight: result.height,
+                            generateId: () => this.generateUUID()
+                        }));
                         this.renderBoard();
                         await this.saveBoard();
                     }
@@ -1467,15 +1495,15 @@ class StoryboardWorkspace {
                     
                     const result = await response.json();
                     if (result.filename) {
-                        this.boardData.items.push({
-                            id: this.generateUUID(),
-                            type: "image",
+                        this.boardData.items.push(createImageItem({
                             x: mouseX,
                             y: mouseY,
-                            w: 512,
-                            h: 512,
-                            image_ref: result.filename
-                        });
+                            imageRef: result.filename,
+                            label: file.name || "Dropped Image",
+                            imageWidth: result.width,
+                            imageHeight: result.height,
+                            generateId: () => this.generateUUID()
+                        }));
                         this.renderBoard();
                         await this.saveBoard();
                     }
