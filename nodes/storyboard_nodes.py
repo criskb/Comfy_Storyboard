@@ -138,39 +138,67 @@ class StoryboardSend:
         selection = board_data.get("selection", [])
         items = board_data.get("items", [])
         
+        def get_display_size(source_w, source_h, max_size=512):
+            source_w = max(1, int(source_w))
+            source_h = max(1, int(source_h))
+            aspect = source_w / source_h
+            if source_w >= source_h:
+                w = max_size
+                h = max(50, int(round(w / aspect)))
+            else:
+                h = max_size
+                w = max(50, int(round(h * aspect)))
+            return w, h, aspect
+
         # Save images to assets
         filenames = []
+        dimensions = []
         for i in range(images.shape[0]):
             img_tensor = images[i].unsqueeze(0)
+            img_h = int(images[i].shape[0])
+            img_w = int(images[i].shape[1])
             filename = store.add_asset(board_id, img_tensor)
             filenames.append(filename)
+            dimensions.append((img_w, img_h))
             
-        def create_new_at_end(fname, idx, base_label="Generated"):
+        def create_new_at_end(fname, idx, source_w, source_h, base_label="Generated"):
             # Find a good spot for the new item
             last_item = items[-1] if items else {"x": 0, "y": 0, "w": 512, "h": 512}
+            w, h, aspect = get_display_size(source_w, source_h)
             return {
                 "id": str(uuid.uuid4()),
                 "type": "image",
                 "x": last_item["x"] + last_item["w"] + 20 + (idx * 532),
                 "y": last_item["y"],
-                "w": 512,
-                "h": 512,
+                "w": w,
+                "h": h,
                 "label": label or base_label,
                 "tags": tags.split(",") if tags else [],
-                "image_ref": fname
+                "image_ref": fname,
+                "image_width": source_w,
+                "image_height": source_h,
+                "aspect": aspect
             }
 
         if target_mode == "selected" and selection:
             # Map batch items to selected items
             for i in range(len(filenames)):
                 filename = filenames[i]
+                source_w, source_h = dimensions[i]
                 if i < len(selection):
                     # Replace existing item
                     item_id = selection[i]
                     for item in items:
                         if item["id"] == item_id:
+                            current_w = max(50, item.get("w", 512))
+                            aspect = source_w / max(1, source_h)
                             item["image_ref"] = filename
                             item["type"] = "image"
+                            item["w"] = current_w
+                            item["h"] = max(50, int(round(current_w / aspect)))
+                            item["image_width"] = source_w
+                            item["image_height"] = source_h
+                            item["aspect"] = aspect
                             item["label"] = label or item.get("label", "Updated")
                             item["tags"] = list(set(item.get("tags", []) + (tags.split(",") if tags else [])))
                             break
@@ -184,10 +212,13 @@ class StoryboardSend:
                             "x": first_item["x"] + first_item["w"] + 20 + ((i - len(selection)) * 10),
                             "y": first_item["y"] + ((i - len(selection)) * 10),
                             "w": first_item["w"],
-                            "h": first_item["h"],
+                            "h": max(50, int(round(first_item["w"] / (source_w / max(1, source_h))))),
                             "label": label or "Batch variant",
                             "tags": tags.split(",") if tags else [],
-                            "image_ref": filename
+                            "image_ref": filename,
+                            "image_width": source_w,
+                            "image_height": source_h,
+                            "aspect": source_w / max(1, source_h)
                         }
                         items.append(new_item)
 
@@ -196,24 +227,35 @@ class StoryboardSend:
             found = False
             for item in items:
                 if item["id"] == target:
+                    source_w, source_h = dimensions[0]
+                    aspect = source_w / max(1, source_h)
                     item["image_ref"] = filenames[0]
                     item["type"] = "image"
+                    item["h"] = max(50, int(round(item.get("w", 512) / aspect)))
+                    item["image_width"] = source_w
+                    item["image_height"] = source_h
+                    item["aspect"] = aspect
                     item["label"] = label or item.get("label", "")
                     item["tags"] = list(set(item.get("tags", []) + (tags.split(",") if tags else [])))
                     
                     # Handle extra images in batch
                     if len(filenames) > 1 and append_mode == "append":
                         for i, fname in enumerate(filenames[1:]):
+                            source_w, source_h = dimensions[i + 1]
+                            aspect = source_w / max(1, source_h)
                             new_item = {
                                 "id": str(uuid.uuid4()),
                                 "type": "image",
                                 "x": item["x"] + item["w"] + 20 + (i * 10),
                                 "y": item["y"] + (i * 10),
                                 "w": item["w"],
-                                "h": item["h"],
+                                "h": max(50, int(round(item["w"] / aspect))),
                                 "label": label or "Variant",
                                 "tags": tags.split(",") if tags else [],
-                                "image_ref": fname
+                                "image_ref": fname,
+                                "image_width": source_w,
+                                "image_height": source_h,
+                                "aspect": aspect
                             }
                             items.append(new_item)
                     found = True
@@ -221,42 +263,55 @@ class StoryboardSend:
             if not found:
                 # If placeholder ID not found, treat as new items
                 for i, filename in enumerate(filenames):
-                    items.append(create_new_at_end(filename, i))
+                    source_w, source_h = dimensions[i]
+                    items.append(create_new_at_end(filename, i, source_w, source_h))
 
         elif target_mode == "tag" and target:
             # Find items with the given tag
             tag_items = [it for it in items if target in it.get("tags", [])]
             if tag_items:
                 for i, filename in enumerate(filenames):
+                    source_w, source_h = dimensions[i]
                     if i < len(tag_items):
                         it = tag_items[i]
+                        aspect = source_w / max(1, source_h)
                         it["image_ref"] = filename
                         it["type"] = "image"
+                        it["h"] = max(50, int(round(it.get("w", 512) / aspect)))
+                        it["image_width"] = source_w
+                        it["image_height"] = source_h
+                        it["aspect"] = aspect
                         it["label"] = label or it.get("label", "")
                     elif append_mode == "append":
                         # Append extras near the last tagged item
                         last_tag_item = tag_items[-1]
+                        aspect = source_w / max(1, source_h)
                         new_item = {
                             "id": str(uuid.uuid4()),
                             "type": "image",
                             "x": last_tag_item["x"] + last_tag_item["w"] + 20 + ((i - len(tag_items)) * 10),
                             "y": last_tag_item["y"] + ((i - len(tag_items)) * 10),
                             "w": last_tag_item["w"],
-                            "h": last_tag_item["h"],
+                            "h": max(50, int(round(last_tag_item["w"] / aspect))),
                             "label": label or "Tagged variant",
                             "tags": tags.split(",") if tags else [target],
-                            "image_ref": filename
+                            "image_ref": filename,
+                            "image_width": source_w,
+                            "image_height": source_h,
+                            "aspect": aspect
                         }
                         items.append(new_item)
             else:
                 # If no items with tag found, create new items with the tag
                 for i, filename in enumerate(filenames):
-                    items.append(create_new_at_end(filename, i, base_label=f"Tag: {target}"))
+                    source_w, source_h = dimensions[i]
+                    items.append(create_new_at_end(filename, i, source_w, source_h, base_label=f"Tag: {target}"))
 
         else:
             # target_mode == "new_item" or fallback
             for i, filename in enumerate(filenames):
-                items.append(create_new_at_end(filename, i))
+                source_w, source_h = dimensions[i]
+                items.append(create_new_at_end(filename, i, source_w, source_h))
         
         board_data["items"] = items
         store.save_board(board_data)
