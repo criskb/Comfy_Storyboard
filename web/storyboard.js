@@ -943,6 +943,18 @@ class StoryboardWorkspace {
                 container.className = "palette-widget";
                 el.appendChild(container);
             }
+            let linkBadge = el.querySelector(".palette-link-badge");
+            if (item.palette_source_id) {
+                if (!linkBadge) {
+                    linkBadge = document.createElement("div");
+                    linkBadge.className = "palette-link-badge";
+                    el.appendChild(linkBadge);
+                }
+                linkBadge.innerText = "🔗";
+                linkBadge.title = `Linked to ${item.palette_source_id}`;
+            } else if (linkBadge) {
+                linkBadge.remove();
+            }
             const colors = item.palette_data || [];
             container.innerHTML = "";
             colors.forEach(hex => {
@@ -1341,7 +1353,7 @@ class StoryboardWorkspace {
                         </select>
                     </div>
                     <div class="inspector-actions">
-                        <button id="action-generate-image-palette">Generate Palette Image</button>
+                        <button id="action-generate-image-palette">Show Palette</button>
                     </div>
                 `;
             }
@@ -1505,18 +1517,25 @@ class StoryboardWorkspace {
                         if (result.colors && result.colors.length) {
                             const pillWidth = 88;
                             const pillGap = 10;
-                            const paletteItem = {
+                            const paletteWidth = Math.max(240, result.colors.length * (pillWidth + pillGap) + 20);
+                            const existingPalette = this.boardData.items.find(i => i.type === "palette" && i.palette_source_id === item.id);
+                            const paletteItem = existingPalette || {
                                 id: this.generateUUID(),
                                 type: "palette",
-                                x: item.x + item.w + 20,
-                                y: item.y,
-                                w: Math.max(240, result.colors.length * (pillWidth + pillGap) + 20),
-                                h: 72,
-                                label: `${item.label || "Image"} Palette`,
                                 tags: ["palette"],
-                                palette_data: result.colors
                             };
-                            this.boardData.items.push(paletteItem);
+
+                            paletteItem.x = item.x - paletteWidth - 20;
+                            paletteItem.y = item.y;
+                            paletteItem.w = paletteWidth;
+                            paletteItem.h = 72;
+                            paletteItem.label = `${item.label || "Image"} Palette`;
+                            paletteItem.palette_data = result.colors;
+                            paletteItem.palette_source_id = item.id;
+
+                            if (!existingPalette) {
+                                this.boardData.items.push(paletteItem);
+                            }
                             this.boardData.selection = [paletteItem.id];
                             this.renderBoard();
                             this.saveBoard();

@@ -473,6 +473,15 @@
     padding: 0 10px;
 }
 
+.palette-link-badge {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    font-size: 12px;
+    opacity: 0.8;
+    pointer-events: none;
+}
+
 .storyboard-item.note-item {
     background: #ffeb3b;
     color: #333;
