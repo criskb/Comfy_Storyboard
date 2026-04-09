@@ -28,8 +28,16 @@ class Storyboard:
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "MASK", "JSON", "STORYBOARD_MANIFEST", "IMAGE", "CONDITIONING", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE")
-    RETURN_NAMES = ("selected_image", "selected_batch", "selected_mask", "selected_meta", "board_manifest", "board_preview", "conditioning", "ref_1", "ref_2", "ref_3", "ref_4", "ref_5", "ref_6", "ref_7", "ref_8")
+    RETURN_TYPES = (
+        "IMAGE", "IMAGE", "MASK", "JSON", "STORYBOARD_MANIFEST", "IMAGE", "CONDITIONING",
+        "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE",
+        "STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING",
+    )
+    RETURN_NAMES = (
+        "selected_image", "selected_batch", "selected_mask", "selected_meta", "board_manifest", "board_preview", "conditioning",
+        "ref_1", "ref_2", "ref_3", "ref_4", "ref_5", "ref_6", "ref_7", "ref_8",
+        "ref_video_1", "ref_video_2", "ref_video_3", "ref_video_4", "ref_video_5", "ref_video_6", "ref_video_7", "ref_video_8",
+    )
     FUNCTION = "process"
     CATEGORY = "Storyboard"
 
@@ -50,6 +58,7 @@ class Storyboard:
         
         # Reference images
         refs = [torch.zeros((1, 64, 64, 3)) for _ in range(8)]
+        ref_videos = ["" for _ in range(8)]
         items = board_data.get("items", [])
         
         # Sort items to maintain layering during flattening
@@ -63,6 +72,9 @@ class Storyboard:
             img_path = None
             if item.get("type") == "image" and item.get("image_ref"):
                 img_path = os.path.join(store._get_assets_path(board_id), item["image_ref"])
+            elif item.get("type") == "video" and item.get("video_ref"):
+                ref_videos[ref_idx - 1] = os.path.join(store._get_assets_path(board_id), item["video_ref"])
+                continue
             elif item.get("type") == "frame":
                 # Automatically flatten frame
                 filename = store.flatten_frame(board_id, item["id"], scale=2.0)
@@ -96,7 +108,7 @@ class Storyboard:
         dummy_mask = torch.zeros((1, 64, 64))
         dummy_json = {}
         
-        return (dummy_image, dummy_image, dummy_mask, dummy_json, board_data, dummy_image, conditioning, *refs)
+        return (dummy_image, dummy_image, dummy_mask, dummy_json, board_data, dummy_image, conditioning, *refs, *ref_videos)
 
 class StoryboardSend:
     @classmethod
@@ -107,8 +119,8 @@ class StoryboardSend:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "images": ("IMAGE",),
                 "board_id": ("STRING", {"default": "default"}),
+                "media_kind": (["auto", "image", "video"], {"default": "auto"}),
                 "target_mode": (["selected", "placeholder_id", "tag", "new_item"], {"default": "selected"}),
                 "target": ("STRING", {"default": ""}),
                 "label": ("STRING", {"default": ""}),
@@ -116,6 +128,9 @@ class StoryboardSend:
                 "append_mode": (["replace", "append"], {"default": "replace"}),
             },
             "optional": {
+                "images": ("IMAGE",),
+                "video": ("VIDEO",),
+                "video_path": ("STRING", {"default": ""}),
                 "manifest": ("STORYBOARD_MANIFEST",),
             }
         }
@@ -126,69 +141,166 @@ class StoryboardSend:
     CATEGORY = "Storyboard"
     OUTPUT_NODE = True
 
-    def send(self, images, board_id, target_mode, target, label, tags, append_mode, manifest=None):
+    def send(self, board_id, media_kind, target_mode, target, label, tags, append_mode, images=None, video=None, video_path="", manifest=None):
         if manifest and isinstance(manifest, dict) and "board_id" in manifest:
             board_id = manifest["board_id"]
         
         if not board_id:
             board_id = "default"
             
-        print(f"StoryboardSend: Sending {images.shape[0]} images to board '{board_id}' (mode: {target_mode})")
+        raw_tags = [t.strip() for t in (tags or "").split(",") if t.strip()]
         board_data = store.get_board(board_id)
         selection = board_data.get("selection", [])
         items = board_data.get("items", [])
         
-        # Save images to assets
-        filenames = []
-        for i in range(images.shape[0]):
-            img_tensor = images[i].unsqueeze(0)
-            filename = store.add_asset(board_id, img_tensor)
-            filenames.append(filename)
-            
-        def create_new_at_end(fname, idx, base_label="Generated"):
+        def get_display_size(source_w, source_h, max_size=512):
+            source_w = max(1, int(source_w))
+            source_h = max(1, int(source_h))
+            aspect = source_w / source_h
+            if source_w >= source_h:
+                w = max_size
+                h = max(50, int(round(w / aspect)))
+            else:
+                h = max_size
+                w = max(50, int(round(h * aspect)))
+            return w, h, aspect
+
+        media_entries = []
+
+        if images is not None and media_kind in ("auto", "image"):
+            for i in range(images.shape[0]):
+                img_tensor = images[i].unsqueeze(0)
+                img_h = int(images[i].shape[0])
+                img_w = int(images[i].shape[1])
+                filename = store.add_asset(board_id, img_tensor)
+                media_entries.append({
+                    "kind": "image",
+                    "filename": filename,
+                    "source_w": img_w,
+                    "source_h": img_h,
+                })
+
+        resolved_video_path = (video_path or "").strip()
+        if not resolved_video_path and video is not None:
+            if isinstance(video, str):
+                resolved_video_path = video
+            elif isinstance(video, dict):
+                resolved_video_path = video.get("path") or video.get("filename") or video.get("fullpath") or ""
+            elif isinstance(video, (list, tuple)) and len(video) > 0:
+                first = video[0]
+                if isinstance(first, str):
+                    resolved_video_path = first
+
+        should_use_video = bool(resolved_video_path) and (media_kind == "video" or (media_kind == "auto" and not media_entries))
+        if should_use_video:
+            src = resolved_video_path.strip()
+            if os.path.exists(src):
+                video_filename = store.add_video_asset(board_id, src)
+            else:
+                candidate = os.path.join(store._get_assets_path(board_id), os.path.basename(src))
+                if os.path.exists(candidate):
+                    video_filename = os.path.basename(candidate)
+                else:
+                    raise ValueError(f"StoryboardSend: video source not found: {resolved_video_path}")
+            media_entries = [{
+                "kind": "video",
+                "filename": video_filename,
+                "source_w": 640,
+                "source_h": 360,
+            }]
+
+        if media_kind == "video" and not resolved_video_path:
+            raise ValueError("StoryboardSend: media_kind is 'video' but no video/video_path input was provided.")
+        if media_kind == "image" and images is None:
+            raise ValueError("StoryboardSend: media_kind is 'image' but no images input was provided.")
+        if not media_entries:
+            raise ValueError("StoryboardSend: no media received. Connect IMAGE or provide video_path.")
+
+        print(f"StoryboardSend: Sending {len(media_entries)} {media_entries[0]['kind']} item(s) to board '{board_id}' (mode: {target_mode})")
+
+        def apply_media_to_item(item, entry, overwrite_size=False):
+            source_w = entry["source_w"]
+            source_h = entry["source_h"]
+            aspect = source_w / max(1, source_h)
+            item["type"] = entry["kind"]
+            item["label"] = label or item.get("label", ("Video" if entry["kind"] == "video" else "Updated"))
+            item["tags"] = list(dict.fromkeys(item.get("tags", []) + raw_tags))
+            item["image_width"] = source_w
+            item["image_height"] = source_h
+            item["aspect"] = aspect
+            if overwrite_size:
+                item["w"], item["h"], _ = get_display_size(source_w, source_h)
+            else:
+                current_w = max(50, int(item.get("w", 512)))
+                item["h"] = max(50, int(round(current_w / aspect)))
+            if entry["kind"] == "image":
+                item["image_ref"] = entry["filename"]
+                item.pop("video_ref", None)
+            else:
+                item["video_ref"] = entry["filename"]
+                item.pop("image_ref", None)
+                item.pop("crop", None)
+
+        def create_new_at_end(entry, idx, base_label="Generated"):
             # Find a good spot for the new item
             last_item = items[-1] if items else {"x": 0, "y": 0, "w": 512, "h": 512}
-            return {
+            source_w = entry["source_w"]
+            source_h = entry["source_h"]
+            w, h, aspect = get_display_size(source_w, source_h)
+            item = {
                 "id": str(uuid.uuid4()),
-                "type": "image",
+                "type": entry["kind"],
                 "x": last_item["x"] + last_item["w"] + 20 + (idx * 532),
                 "y": last_item["y"],
-                "w": 512,
-                "h": 512,
-                "label": label or base_label,
-                "tags": tags.split(",") if tags else [],
-                "image_ref": fname
+                "w": w,
+                "h": h,
+                "label": label or ("Generated Video" if entry["kind"] == "video" else base_label),
+                "tags": raw_tags,
+                "image_width": source_w,
+                "image_height": source_h,
+                "aspect": aspect
             }
+            if entry["kind"] == "image":
+                item["image_ref"] = entry["filename"]
+            else:
+                item["video_ref"] = entry["filename"]
+            return item
 
         if target_mode == "selected" and selection:
             # Map batch items to selected items
-            for i in range(len(filenames)):
-                filename = filenames[i]
+            for i in range(len(media_entries)):
+                entry = media_entries[i]
+                source_w = entry["source_w"]
+                source_h = entry["source_h"]
                 if i < len(selection):
                     # Replace existing item
                     item_id = selection[i]
                     for item in items:
                         if item["id"] == item_id:
-                            item["image_ref"] = filename
-                            item["type"] = "image"
-                            item["label"] = label or item.get("label", "Updated")
-                            item["tags"] = list(set(item.get("tags", []) + (tags.split(",") if tags else [])))
+                            apply_media_to_item(item, entry)
                             break
                 else:
                     # Append new items nearby the first selection
                     first_item = next((it for it in items if it["id"] == selection[0]), None)
                     if first_item:
+                        aspect = source_w / max(1, source_h)
                         new_item = {
                             "id": str(uuid.uuid4()),
-                            "type": "image",
+                            "type": entry["kind"],
                             "x": first_item["x"] + first_item["w"] + 20 + ((i - len(selection)) * 10),
                             "y": first_item["y"] + ((i - len(selection)) * 10),
                             "w": first_item["w"],
-                            "h": first_item["h"],
+                            "h": max(50, int(round(first_item["w"] / aspect))),
                             "label": label or "Batch variant",
-                            "tags": tags.split(",") if tags else [],
-                            "image_ref": filename
+                            "tags": raw_tags,
+                            "image_width": source_w,
+                            "image_height": source_h,
+                            "aspect": aspect
                         }
+                        if entry["kind"] == "image":
+                            new_item["image_ref"] = entry["filename"]
+                        else:
+                            new_item["video_ref"] = entry["filename"]
                         items.append(new_item)
 
         elif target_mode == "placeholder_id" and target:
@@ -196,71 +308,83 @@ class StoryboardSend:
             found = False
             for item in items:
                 if item["id"] == target:
-                    item["image_ref"] = filenames[0]
-                    item["type"] = "image"
-                    item["label"] = label or item.get("label", "")
-                    item["tags"] = list(set(item.get("tags", []) + (tags.split(",") if tags else [])))
-                    
-                    # Handle extra images in batch
-                    if len(filenames) > 1 and append_mode == "append":
-                        for i, fname in enumerate(filenames[1:]):
+                    apply_media_to_item(item, media_entries[0])
+                    # Handle extra media in batch
+                    if len(media_entries) > 1 and append_mode == "append":
+                        for i, entry in enumerate(media_entries[1:]):
+                            source_w = entry["source_w"]
+                            source_h = entry["source_h"]
+                            aspect = source_w / max(1, source_h)
                             new_item = {
                                 "id": str(uuid.uuid4()),
-                                "type": "image",
+                                "type": entry["kind"],
                                 "x": item["x"] + item["w"] + 20 + (i * 10),
                                 "y": item["y"] + (i * 10),
                                 "w": item["w"],
-                                "h": item["h"],
+                                "h": max(50, int(round(item["w"] / aspect))),
                                 "label": label or "Variant",
-                                "tags": tags.split(",") if tags else [],
-                                "image_ref": fname
+                                "tags": raw_tags,
+                                "image_width": source_w,
+                                "image_height": source_h,
+                                "aspect": aspect
                             }
+                            if entry["kind"] == "image":
+                                new_item["image_ref"] = entry["filename"]
+                            else:
+                                new_item["video_ref"] = entry["filename"]
                             items.append(new_item)
                     found = True
                     break
             if not found:
                 # If placeholder ID not found, treat as new items
-                for i, filename in enumerate(filenames):
-                    items.append(create_new_at_end(filename, i))
+                for i, entry in enumerate(media_entries):
+                    items.append(create_new_at_end(entry, i))
 
         elif target_mode == "tag" and target:
             # Find items with the given tag
             tag_items = [it for it in items if target in it.get("tags", [])]
             if tag_items:
-                for i, filename in enumerate(filenames):
+                for i, entry in enumerate(media_entries):
+                    source_w = entry["source_w"]
+                    source_h = entry["source_h"]
                     if i < len(tag_items):
-                        it = tag_items[i]
-                        it["image_ref"] = filename
-                        it["type"] = "image"
-                        it["label"] = label or it.get("label", "")
+                        apply_media_to_item(tag_items[i], entry)
                     elif append_mode == "append":
                         # Append extras near the last tagged item
                         last_tag_item = tag_items[-1]
+                        aspect = source_w / max(1, source_h)
                         new_item = {
                             "id": str(uuid.uuid4()),
-                            "type": "image",
+                            "type": entry["kind"],
                             "x": last_tag_item["x"] + last_tag_item["w"] + 20 + ((i - len(tag_items)) * 10),
                             "y": last_tag_item["y"] + ((i - len(tag_items)) * 10),
                             "w": last_tag_item["w"],
-                            "h": last_tag_item["h"],
+                            "h": max(50, int(round(last_tag_item["w"] / aspect))),
                             "label": label or "Tagged variant",
-                            "tags": tags.split(",") if tags else [target],
-                            "image_ref": filename
+                            "tags": raw_tags or [target],
+                            "image_width": source_w,
+                            "image_height": source_h,
+                            "aspect": aspect
                         }
+                        if entry["kind"] == "image":
+                            new_item["image_ref"] = entry["filename"]
+                        else:
+                            new_item["video_ref"] = entry["filename"]
                         items.append(new_item)
             else:
                 # If no items with tag found, create new items with the tag
-                for i, filename in enumerate(filenames):
-                    items.append(create_new_at_end(filename, i, base_label=f"Tag: {target}"))
+                for i, entry in enumerate(media_entries):
+                    items.append(create_new_at_end(entry, i, base_label=f"Tag: {target}"))
 
         else:
             # target_mode == "new_item" or fallback
-            for i, filename in enumerate(filenames):
-                items.append(create_new_at_end(filename, i))
+            for i, entry in enumerate(media_entries):
+                items.append(create_new_at_end(entry, i))
         
         board_data["items"] = items
         store.save_board(board_data)
-        return (images, board_data)
+        passthrough = images if images is not None else torch.zeros((1, 64, 64, 3))
+        return (passthrough, board_data)
 
 
 class StoryboardRead:
