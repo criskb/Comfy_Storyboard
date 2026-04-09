@@ -60,6 +60,8 @@ class StoryboardWorkspace {
         this.internalClipboard = [];
         this.needsReload = false;
         this.inspectorOpen = false;
+        this.themeMode = localStorage.getItem("storyboard.themeMode") || "system";
+        this.systemThemeQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
@@ -125,6 +127,7 @@ class StoryboardWorkspace {
                 <button id="storyboard-add-note">+ Add Note</button>
                 <button id="storyboard-add-frame">+ Add Frame</button>
                 <button id="storyboard-clear" class="danger">Clear Board</button>
+                <button id="storyboard-theme-toggle" class="storyboard-theme-toggle" title="Theme: System">◐</button>
                 <button id="storyboard-close">✕</button>
             </div>
         `;
@@ -201,6 +204,16 @@ class StoryboardWorkspace {
         document.body.appendChild(this.overlay);
 
         document.getElementById("storyboard-close").onclick = () => this.hide();
+        this.themeToggleButton = document.getElementById("storyboard-theme-toggle");
+        if (this.themeToggleButton) {
+            this.themeToggleButton.onclick = () => this.cycleThemeMode();
+        }
+        this.applyThemeMode();
+        if (this.systemThemeQuery?.addEventListener) {
+            this.systemThemeQuery.addEventListener("change", () => {
+                if (this.themeMode === "system") this.applyThemeMode();
+            });
+        }
         document.getElementById("storyboard-minimap-fit").onclick = () => this.fitViewToContent();
         document.getElementById("storyboard-minimap-center").onclick = () => this.centerOnContent();
         document.getElementById("storyboard-minimap-zoom-in").onclick = () => this.zoomAtCenter(1.15);
@@ -440,6 +453,31 @@ class StoryboardWorkspace {
         });
         this.renderBoard();
         this.saveBoard();
+    }
+
+    getResolvedTheme() {
+        if (this.themeMode === "dark" || this.themeMode === "light") return this.themeMode;
+        return this.systemThemeQuery?.matches ? "dark" : "light";
+    }
+
+    applyThemeMode() {
+        if (!this.window) return;
+        const resolved = this.getResolvedTheme();
+        this.window.dataset.theme = resolved;
+        this.window.dataset.themeMode = this.themeMode;
+        if (this.themeToggleButton) {
+            const glyph = this.themeMode === "system" ? "◐" : (this.themeMode === "light" ? "☼" : "☾");
+            this.themeToggleButton.textContent = glyph;
+            this.themeToggleButton.title = `Theme: ${this.themeMode[0].toUpperCase()}${this.themeMode.slice(1)}`;
+        }
+    }
+
+    cycleThemeMode() {
+        const order = ["system", "light", "dark"];
+        const idx = order.indexOf(this.themeMode);
+        this.themeMode = order[(idx + 1) % order.length];
+        localStorage.setItem("storyboard.themeMode", this.themeMode);
+        this.applyThemeMode();
     }
 
     hexToRgb(color) {
