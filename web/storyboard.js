@@ -960,6 +960,24 @@ class StoryboardWorkspace {
             container.classList.toggle("left-position", palettePosition === "left");
             container.classList.toggle("bottom-position", palettePosition !== "left");
             const colors = item.palette_data || [];
+
+            if (sourceItem) {
+                if (palettePosition === "left") {
+                    item.w = 170;
+                    item.h = Math.max(170, colors.length * 66);
+                } else {
+                    item.w = Math.max(170, colors.length * 66);
+                    item.h = 170;
+                }
+                const position = this.getPaletteWidgetPosition(sourceItem, item.w, item.h);
+                item.x = position.x;
+                item.y = position.y;
+                el.style.left = `${item.x}px`;
+                el.style.top = `${item.y}px`;
+                el.style.width = `${item.w}px`;
+                el.style.height = `${item.h}px`;
+            }
+
             container.innerHTML = "";
             colors.forEach(hex => {
                 const pill = document.createElement("div");

@@ -442,10 +442,10 @@
 }
 
 .storyboard-item.palette-widget-item {
-    background: #1b1b1b;
-    border-radius: 12px;
-    border: 1px solid #3a3a3a;
-    padding: 10px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    overflow: visible;
 }
 
 .palette-widget {
@@ -465,28 +465,22 @@
 
 .palette-widget.left-position {
     flex-direction: column;
-    align-items: flex-start;
-}
-
-.palette-widget .palette-color,
-.frame-palette-bar[data-position="left"] .palette-color {
-    flex: 0 0 auto;
-    width: 160px;
-    height: 26px;
-    border-radius: 999px;
-    display: flex;
     align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    cursor: pointer;
-    padding: 0 10px;
 }
 
-.palette-widget .palette-color span,
-.frame-palette-bar[data-position="left"] .palette-color span {
-    transform: none;
+.frame-palette-bar[data-position="left"] .palette-color,
+.palette-widget.left-position .palette-color {
+    transform: rotate(90deg);
+}
+
+.frame-palette-bar[data-position="left"] .palette-color:hover,
+.palette-widget.left-position .palette-color:hover {
+    transform: rotate(90deg) translateY(-8px);
+}
+
+.frame-palette-bar[data-position="left"] .palette-color:active,
+.palette-widget.left-position .palette-color:active {
+    transform: rotate(90deg) scale(0.95);
 }
 
 .palette-link-badge {
