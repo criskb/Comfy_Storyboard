@@ -955,11 +955,15 @@ class StoryboardWorkspace {
             } else if (linkBadge) {
                 linkBadge.remove();
             }
+            const sourceItem = this.boardData.items.find(i => i.id === item.palette_source_id);
+            const palettePosition = sourceItem?.palette_position || "left";
+            container.classList.toggle("left-position", palettePosition === "left");
+            container.classList.toggle("bottom-position", palettePosition !== "left");
             const colors = item.palette_data || [];
             container.innerHTML = "";
             colors.forEach(hex => {
                 const pill = document.createElement("div");
-                pill.className = "palette-widget-pill";
+                pill.className = "palette-color";
                 pill.style.backgroundColor = hex;
                 pill.style.color = this.getContrastColor(hex);
                 pill.innerText = hex.toUpperCase();
@@ -1044,11 +1048,13 @@ class StoryboardWorkspace {
 
         const framePalettePosition = item.palette_position || "bottom";
         if (framePalettePosition === "left") {
+            paletteBar.dataset.position = "left";
             paletteBar.style.left = "-14px";
             paletteBar.style.bottom = "50%";
             paletteBar.style.transform = "translate(-100%, 50%)";
             paletteBar.style.flexDirection = "column";
         } else {
+            paletteBar.dataset.position = "bottom";
             paletteBar.style.left = "50%";
             paletteBar.style.bottom = "-170px";
             paletteBar.style.transform = "translateX(-50%)";
