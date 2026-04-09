@@ -1183,6 +1183,19 @@ class StoryboardWorkspace {
         this.renderPaletteColors(paletteBar, colors);
     }
 
+    async loadImagePalette(item) {
+        const paletteCount = item.palette_colors || 8;
+        const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/image/${item.id}?num_colors=${paletteCount}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const result = await response.json();
+        if (!result.colors || !result.colors.length) return false;
+        item.image_palette = result.colors;
+        item.image_palette_count = paletteCount;
+        return true;
+    }
+
     async copyToClipboard(text) {
         console.log("Copying to clipboard:", text);
         return copyTextToClipboard(text);
@@ -1622,7 +1635,8 @@ class StoryboardWorkspace {
                     return;
                 }
 
-                if (item.image_palette && item.image_palette.length) {
+                const paletteCount = item.palette_colors || 8;
+                if (item.image_palette && item.image_palette.length && item.image_palette_count === paletteCount) {
                     item.image_palette_visible = true;
                     this.renderBoard();
                     this.saveBoard();
@@ -1630,14 +1644,8 @@ class StoryboardWorkspace {
                 }
 
                 try {
-                    const paletteCount = item.palette_colors || 8;
-                    const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/image/${item.id}?num_colors=${paletteCount}`);
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
-                    }
-                    const result = await response.json();
-                    if (result.colors && result.colors.length) {
-                        item.image_palette = result.colors;
+                    const ok = await this.loadImagePalette(item);
+                    if (ok) {
                         item.image_palette_visible = true;
                         this.renderBoard();
                         this.saveBoard();
@@ -1676,8 +1684,21 @@ class StoryboardWorkspace {
             if (item.type === "image") {
                 const imagePaletteSelect = document.getElementById("inspector-image-palette-colors");
                 if (imagePaletteSelect) {
-                    imagePaletteSelect.onchange = (e) => {
+                    imagePaletteSelect.onchange = async (e) => {
                         item.palette_colors = parseInt(e.target.value, 10) || 8;
+                        if (item.image_palette_visible) {
+                            try {
+                                const ok = await this.loadImagePalette(item);
+                                if (!ok) alert("No palette colors found for this image.");
+                            } catch (err) {
+                                console.error("Palette refresh failed:", err);
+                                alert("Palette refresh failed. Check server logs and retry.");
+                            }
+                            this.renderBoard();
+                        } else {
+                            item.image_palette = null;
+                            item.image_palette_count = null;
+                        }
                         this.saveBoard();
                     };
                 }
