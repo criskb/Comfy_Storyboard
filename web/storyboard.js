@@ -64,6 +64,11 @@ class StoryboardWorkspace {
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
             if (this.overlay.style.display === "flex") {
+                if (e.key === "Escape") {
+                    e.preventDefault();
+                    this.hide();
+                    return;
+                }
                 const focused = document.activeElement;
                 if (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable) return;
 
@@ -1023,6 +1028,27 @@ class StoryboardWorkspace {
             const bgColor = item.color || "#ffeb3b";
             el.style.backgroundColor = bgColor;
             el.style.color = this.getContrastColor(bgColor);
+
+            let meta = el.querySelector(".note-meta");
+            if (!meta) {
+                meta = document.createElement("div");
+                meta.className = "note-meta";
+                el.appendChild(meta);
+            }
+            meta.innerHTML = "";
+            if (item.label) {
+                const labelChip = document.createElement("div");
+                labelChip.className = "note-chip note-chip-label";
+                labelChip.innerText = item.label;
+                meta.appendChild(labelChip);
+            }
+            (item.tags || []).forEach(tag => {
+                const tagChip = document.createElement("div");
+                tagChip.className = "note-chip note-chip-tag";
+                tagChip.innerText = `#${tag}`;
+                meta.appendChild(tagChip);
+            });
+            meta.style.display = meta.children.length > 0 ? "flex" : "none";
             
             let content = el.querySelector(".note-content");
             if (!content) {
