@@ -935,6 +935,33 @@ class StoryboardWorkspace {
             }
             label.innerText = item.label || "Empty Slot";
             
+        } else if (item.type === "palette") {
+            el.classList.add("palette-widget-item");
+            let container = el.querySelector(".palette-widget");
+            if (!container) {
+                container = document.createElement("div");
+                container.className = "palette-widget";
+                el.appendChild(container);
+            }
+            const colors = item.palette_data || [];
+            container.innerHTML = "";
+            colors.forEach(hex => {
+                const pill = document.createElement("div");
+                pill.className = "palette-widget-pill";
+                pill.style.backgroundColor = hex;
+                pill.style.color = this.getContrastColor(hex);
+                pill.innerText = hex.toUpperCase();
+                pill.title = `Click to copy: ${hex}`;
+                pill.onmousedown = (e) => e.stopPropagation();
+                pill.onclick = async (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const success = await this.copyToClipboard(hex.toUpperCase());
+                    if (success) this.showCopyFeedback(pill);
+                };
+                container.appendChild(pill);
+            });
+            
         } else if (item.type === "note") {
             el.classList.add("note-item");
             const bgColor = item.color || "#ffeb3b";
@@ -1010,7 +1037,8 @@ class StoryboardWorkspace {
             .sort()
             .join(",");
 
-        const cacheKey = `${item.id}_${containedImageIds}`;
+        const paletteCount = item.palette_colors || 8;
+        const cacheKey = `${item.id}_${paletteCount}_${containedImageIds}`;
         const cached = this.paletteCache.get(item.id);
 
         if (cached && cached.key === cacheKey) {
@@ -1030,7 +1058,6 @@ class StoryboardWorkspace {
         paletteBar.style.display = "flex";
         this.paletteLoading.add(item.id);
         try {
-            const paletteCount = item.palette_colors || 8;
             const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/${item.id}?num_colors=${paletteCount}`);
             const { colors } = await response.json();
             if (colors && colors.length > 0) {
@@ -1290,7 +1317,7 @@ class StoryboardWorkspace {
             return html;
         };
 
-        if (item.type === "image" || item.type === "slot") {
+        if (item.type === "image" || item.type === "slot" || item.type === "palette") {
             fields += `
                 <div class="inspector-field">
                     <label>Label</label>
@@ -1449,7 +1476,7 @@ class StoryboardWorkspace {
             };
         }
 
-        if (item.type === "image" || item.type === "slot") {
+        if (item.type === "image" || item.type === "slot" || item.type === "palette") {
             document.getElementById("inspector-label").onchange = (e) => {
                 item.label = e.target.value;
                 this.saveBoard();
@@ -1475,17 +1502,20 @@ class StoryboardWorkspace {
                         const paletteCount = item.palette_colors || 8;
                         const response = await fetch(`/mkr/storyboard/${this.boardId}/palette/image/${item.id}?num_colors=${paletteCount}`);
                         const result = await response.json();
-                        if (result.filename) {
-                            const paletteItem = createImageItem({
+                        if (result.colors && result.colors.length) {
+                            const pillWidth = 88;
+                            const pillGap = 10;
+                            const paletteItem = {
+                                id: this.generateUUID(),
+                                type: "palette",
                                 x: item.x + item.w + 20,
                                 y: item.y,
-                                imageRef: result.filename,
+                                w: Math.max(240, result.colors.length * (pillWidth + pillGap) + 20),
+                                h: 72,
                                 label: `${item.label || "Image"} Palette`,
-                                imageWidth: result.width,
-                                imageHeight: result.height,
-                                generateId: () => this.generateUUID(),
-                                extra: { tags: ["palette"] }
-                            });
+                                tags: ["palette"],
+                                palette_data: result.colors
+                            };
                             this.boardData.items.push(paletteItem);
                             this.boardData.selection = [paletteItem.id];
                             this.renderBoard();
