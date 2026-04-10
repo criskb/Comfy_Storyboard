@@ -2,9 +2,25 @@ import os
 import json
 import uuid
 import shutil
+import math
+import textwrap
 from PIL import Image, ImageDraw
 import numpy as np
 import torch
+
+from .storyboard_media_utils import apply_normalized_crop
+
+DEFAULT_FRAME_COLOR = "#ffffff"
+DEFAULT_FRAME_RGB = (255, 255, 255)
+DEFAULT_BOARD_SETTINGS = {
+    "snap": True,
+    "grid": False,
+    "grid_spacing": 32,
+    "auto_receive_generated": True,
+    "show_prompt": True,
+    "show_minimap": True,
+    "show_inspector": True,
+}
 
 class StoryboardStore:
     def __init__(self, base_path):
@@ -30,21 +46,27 @@ class StoryboardStore:
                 "items": [],
                 "groups": [],
                 "selection": [],
-                "settings": {
-                    "snap": True,
-                    "grid": False,
-                    "auto_receive_generated": True
-                }
+                "settings": dict(DEFAULT_BOARD_SETTINGS)
             }
         
         with open(json_path, 'r') as f:
-            return json.load(f)
+            board = json.load(f)
+            board["settings"] = {
+                **DEFAULT_BOARD_SETTINGS,
+                **(board.get("settings") or {}),
+            }
+            return board
 
     def save_board(self, board_data, notify=True):
         board_id = board_data.get("board_id")
         if not board_id:
             board_id = str(uuid.uuid4())
             board_data["board_id"] = board_id
+
+        board_data["settings"] = {
+            **DEFAULT_BOARD_SETTINGS,
+            **(board_data.get("settings") or {}),
+        }
 
         board_path = self._get_board_path(board_id)
         if not os.path.exists(board_path):
@@ -115,6 +137,901 @@ class StoryboardStore:
             return True
         return False
 
+    def _sorted_render_items(self, items):
+        order = {id(item): index for index, item in enumerate(items)}
+        return sorted(items, key=lambda item: (item.get("type") != "frame", order.get(id(item), 0)))
+
+    def _hex_to_rgb(self, color, fallback=DEFAULT_FRAME_RGB):
+        if not isinstance(color, str) or not color.startswith("#"):
+            return fallback
+
+        value = color.lstrip("#")
+        if len(value) == 3:
+            value = "".join(channel * 2 for channel in value)
+        if len(value) != 6:
+            return fallback
+
+        try:
+            return tuple(int(value[index:index + 2], 16) for index in (0, 2, 4))
+        except ValueError:
+            return fallback
+
+    def _text_color_for_bg(self, rgb):
+        luminance = (0.2126 * rgb[0]) + (0.7152 * rgb[1]) + (0.0722 * rgb[2])
+        if luminance > 150:
+            return (20, 20, 24, 255)
+        return (245, 245, 245, 255)
+
+    def _rounded_mask(self, width, height, radius):
+        width = max(1, int(width))
+        height = max(1, int(height))
+        radius = max(1, int(radius))
+        mask = Image.new("L", (width, height), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.rounded_rectangle([0, 0, width, height], radius=radius, fill=255)
+        return mask
+
+    def _item_rotation(self, item):
+        try:
+            rotation = float(item.get("rotation", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(-25.0, min(25.0, rotation))
+
+    def _media_presentation(self, item):
+        value = str(item.get("media_presentation", "") or "").strip().lower()
+        if value in {"clean", "panel", "polaroid"}:
+            return value
+        return "clean"
+
+    def _frame_presentation(self, item):
+        value = str(item.get("frame_presentation", "") or "").strip().lower()
+        if value in {"outline", "board", "spotlight"}:
+            return value
+        return "outline"
+
+    def _media_caption_text(self, item, presentation=None):
+        resolved_presentation = presentation or self._media_presentation(item)
+        label = str(item.get("label", "") or "").strip()
+        tags = [str(tag).strip() for tag in item.get("tags", []) if str(tag).strip()]
+
+        if label:
+            text = label
+        elif resolved_presentation == "polaroid" and tags:
+            text = f"#{tags[0]}"
+        elif tags:
+            text = "  ".join(f"#{tag}" for tag in tags[:3])
+        else:
+            text = ""
+
+        if len(text) > 42:
+            text = f"{text[:39]}..."
+        return text
+
+    def _media_layout(self, rel_w, rel_h, presentation, scale=1.0):
+        if presentation == "polaroid":
+            pad = max(8, int(round(12 * scale)))
+            footer_h = max(28, int(round(42 * scale)))
+            return {
+                "media_box": (pad, pad, max(pad + 1, rel_w - pad), max(pad + 1, rel_h - footer_h)),
+                "caption_box": (pad, max(pad + 1, rel_h - footer_h), max(pad + 1, rel_w - pad), max(pad + 1, rel_h - pad)),
+                "card_radius": max(8, int(round(12 * scale))),
+                "media_radius": max(6, int(round(10 * scale))),
+            }
+
+        if presentation == "panel":
+            margin = max(8, int(round(10 * scale)))
+            caption_h = max(26, int(round(min(rel_h * 0.22, 48 * scale))))
+            return {
+                "media_box": (0, 0, rel_w, rel_h),
+                "caption_box": (margin, max(margin, rel_h - caption_h - margin), max(margin + 1, rel_w - margin), max(margin + 1, rel_h - margin)),
+                "card_radius": max(8, int(round(12 * scale))),
+                "media_radius": max(6, int(round(10 * scale))),
+            }
+
+        return {
+            "media_box": (0, 0, rel_w, rel_h),
+            "caption_box": None,
+            "card_radius": max(8, int(round(12 * scale))),
+            "media_radius": max(6, int(round(10 * scale))),
+        }
+
+    def _draw_media_caption(self, draw, caption_box, text, presentation, scale=1.0):
+        if not caption_box or not text:
+            return
+
+        x0, y0, x1, y1 = caption_box
+        if presentation == "polaroid":
+            draw.text(
+                ((x0 + x1) / 2.0, (y0 + y1) / 2.0),
+                text,
+                fill=(31, 41, 55, 255),
+                anchor="mm",
+            )
+            return
+
+        if presentation == "panel":
+            radius = max(8, int(round(12 * scale)))
+            draw.rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=(15, 23, 42, 212))
+            draw.text(
+                (x0 + max(10, int(round(12 * scale))), (y0 + y1) / 2.0),
+                text,
+                fill=(248, 250, 252, 255),
+                anchor="lm",
+            )
+
+    def _frame_header_meta(self, item):
+        scene_code = str(item.get("scene_code", "") or "").strip()
+        title = str(item.get("label", "") or "").strip()
+        subtitle = str(item.get("scene_subtitle", "") or "").strip()
+        if len(scene_code) > 12:
+            scene_code = scene_code[:12]
+        if len(title) > 42:
+            title = f"{title[:39]}..."
+        if len(subtitle) > 68:
+            subtitle = f"{subtitle[:65]}..."
+        return scene_code, title, subtitle
+
+    def _item_render_bounds(self, item):
+        x = float(item.get("x", 0))
+        y = float(item.get("y", 0))
+        width = max(1.0, float(item.get("w", 1)))
+        height = max(1.0, float(item.get("h", 1)))
+        rotation = abs(self._item_rotation(item))
+        if rotation < 0.01:
+            return (x, y, x + width, y + height)
+
+        radians = math.radians(rotation)
+        rotated_w = abs(width * math.cos(radians)) + abs(height * math.sin(radians))
+        rotated_h = abs(width * math.sin(radians)) + abs(height * math.cos(radians))
+        center_x = x + (width / 2.0)
+        center_y = y + (height / 2.0)
+        return (
+            center_x - (rotated_w / 2.0),
+            center_y - (rotated_h / 2.0),
+            center_x + (rotated_w / 2.0),
+            center_y + (rotated_h / 2.0),
+        )
+
+    def _composite_item_tile(self, canvas, tile, rel_x, rel_y, rel_w, rel_h, rotation=0.0):
+        if abs(rotation) > 0.01:
+            tile = tile.rotate(-rotation, resample=Image.Resampling.BICUBIC, expand=True)
+
+        center_x = rel_x + (rel_w / 2.0)
+        center_y = rel_y + (rel_h / 2.0)
+        paste_x = int(round(center_x - (tile.width / 2.0)))
+        paste_y = int(round(center_y - (tile.height / 2.0)))
+        canvas.alpha_composite(tile, (paste_x, paste_y))
+
+    def _draw_item_to_canvas(self, canvas, board_id, item, rel_x, rel_y, rel_w, rel_h, scale=1.0):
+        rel_w = max(1, int(rel_w))
+        rel_h = max(1, int(rel_h))
+        rel_x = int(rel_x)
+        rel_y = int(rel_y)
+        corner_radius = max(4, int(12 * scale))
+        item_type = item.get("type")
+        assets_path = self._get_assets_path(board_id)
+        rotation = self._item_rotation(item)
+
+        if item_type == "image" and item.get("image_ref"):
+            img_path = os.path.join(assets_path, item["image_ref"])
+            if not os.path.exists(img_path):
+                return
+            try:
+                img = Image.open(img_path).convert("RGBA")
+                img = apply_normalized_crop(img, item.get("crop"))
+                presentation = self._media_presentation(item)
+                layout = self._media_layout(rel_w, rel_h, presentation, scale=scale)
+                media_x0, media_y0, media_x1, media_y1 = layout["media_box"]
+                media_w = max(1, media_x1 - media_x0)
+                media_h = max(1, media_y1 - media_y0)
+                img = img.resize((media_w, media_h), Image.Resampling.LANCZOS)
+                mask = self._rounded_mask(media_w, media_h, layout["media_radius"])
+                item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(item_tile)
+                if presentation == "polaroid":
+                    draw.rounded_rectangle(
+                        [0, 0, rel_w - 1, rel_h - 1],
+                        radius=layout["card_radius"],
+                        fill=(247, 241, 232, 255),
+                        outline=(232, 224, 214, 255),
+                    )
+                item_tile.paste(img, (media_x0, media_y0), mask)
+                self._draw_media_caption(
+                    draw,
+                    layout.get("caption_box"),
+                    self._media_caption_text(item, presentation),
+                    presentation,
+                    scale=scale,
+                )
+                self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            except Exception as exc:
+                print(f"Storyboard: failed to render image item '{item.get('id', 'unknown')}': {exc}")
+            return
+
+        if item_type == "video" and item.get("video_ref"):
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            presentation = self._media_presentation(item)
+            layout = self._media_layout(rel_w, rel_h, presentation, scale=scale)
+            media_x0, media_y0, media_x1, media_y1 = layout["media_box"]
+            media_w = max(1, media_x1 - media_x0)
+            media_h = max(1, media_y1 - media_y0)
+            if presentation == "polaroid":
+                draw.rounded_rectangle(
+                    [0, 0, rel_w - 1, rel_h - 1],
+                    radius=layout["card_radius"],
+                    fill=(247, 241, 232, 255),
+                    outline=(232, 224, 214, 255),
+                )
+            mask = self._rounded_mask(media_w, media_h, layout["media_radius"])
+            video_img = Image.new("RGBA", (media_w, media_h), (36, 36, 40, 255))
+            item_tile.paste(video_img, (media_x0, media_y0), mask)
+            draw = ImageDraw.Draw(item_tile)
+            icon_size = max(10, int(min(media_w, media_h) * 0.22))
+            center_x = media_x0 + (media_w // 2)
+            center_y = media_y0 + (media_h // 2)
+            triangle = [
+                (center_x - icon_size // 2, center_y - icon_size),
+                (center_x - icon_size // 2, center_y + icon_size),
+                (center_x + icon_size, center_y),
+            ]
+            draw.polygon(triangle, fill=(255, 255, 255, 220))
+            caption_text = self._media_caption_text(item, presentation)
+            if presentation == "clean":
+                label = caption_text or (item.get("label") or "Video").strip()
+                if label:
+                    draw.text(
+                        (center_x, media_y0 + media_h - max(14, int(16 * scale))),
+                        label,
+                        fill=(235, 235, 235, 255),
+                        anchor="ms",
+                    )
+            else:
+                self._draw_media_caption(
+                    draw,
+                    layout.get("caption_box"),
+                    caption_text,
+                    presentation,
+                    scale=scale,
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "note":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            rgb = self._hex_to_rgb(item.get("color", "#ffeb3b"), fallback=(255, 235, 59))
+            mask = self._rounded_mask(rel_w, rel_h, corner_radius)
+            note_img = Image.new("RGBA", (rel_w, rel_h), (*rgb, 255))
+            item_tile.paste(note_img, (0, 0), mask)
+            content = (item.get("content") or "").strip()
+            if content:
+                draw = ImageDraw.Draw(item_tile)
+                max_chars = max(10, min(42, rel_w // max(8, int(8 * scale))))
+                wrapped = textwrap.fill(content, width=max_chars)
+                draw.multiline_text(
+                    (max(12, int(14 * scale)), max(12, int(14 * scale))),
+                    wrapped,
+                    fill=self._text_color_for_bg(rgb),
+                    spacing=max(4, int(6 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "slot":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            mask = self._rounded_mask(rel_w, rel_h, corner_radius)
+            slot_img = Image.new("RGBA", (rel_w, rel_h), (26, 26, 26, 255))
+            item_tile.paste(slot_img, (0, 0), mask)
+            draw = ImageDraw.Draw(item_tile)
+            draw.text(
+                (rel_w / 2, rel_h / 2),
+                item.get("label", "Slot"),
+                fill=(255, 255, 255, 255),
+                anchor="mm",
+            )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "mood_tag":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            mask = self._rounded_mask(rel_w, rel_h, corner_radius)
+            mood_img = Image.new("RGBA", (rel_w, rel_h), (15, 23, 42, 240))
+            item_tile.paste(mood_img, (0, 0), mask)
+            stripe_w = max(4, int(6 * scale))
+            draw.rectangle([0, 0, stripe_w, rel_h], fill=(*accent_rgb, 255))
+            pad_x = stripe_w + max(12, int(16 * scale))
+            pad_y = max(12, int(16 * scale))
+            draw.text(
+                (pad_x, pad_y),
+                "MOOD",
+                fill=(*accent_rgb, 255),
+            )
+            title = str(item.get("label", "") or "").strip() or "Mood Tag"
+            if len(title) > 32:
+                title = f"{title[:29]}..."
+            draw.text(
+                (pad_x, pad_y + max(16, int(18 * scale))),
+                title,
+                fill=(248, 250, 252, 255),
+            )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(14, min(42, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad_x, pad_y + max(34, int(38 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 220),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "shot_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(250, 246, 240, 252),
+                outline=(219, 224, 230, 255),
+                width=max(1, int(2 * scale)),
+            )
+            pad = max(12, int(16 * scale))
+            badge_h = max(18, int(24 * scale))
+            shot_type = str(item.get("shot_type", "") or "").strip().upper() or "WIDE"
+            badge_w = min(rel_w - (pad * 2), max(56, int(len(shot_type) * 8 * scale) + int(22 * scale)))
+            badge_box = [pad, pad, pad + badge_w, pad + badge_h]
+            draw.rounded_rectangle(
+                badge_box,
+                radius=max(8, int(12 * scale)),
+                fill=(*accent_rgb, 255),
+            )
+            draw.text(
+                ((badge_box[0] + badge_box[2]) / 2.0, (badge_box[1] + badge_box[3]) / 2.0),
+                shot_type,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text(
+                (rel_w - pad, pad + (badge_h / 2.0)),
+                "Shot",
+                fill=(100, 116, 139, 255),
+                anchor="rm",
+            )
+            title = str(item.get("label", "") or "").strip() or "Shot Card"
+            if len(title) > 34:
+                title = f"{title[:31]}..."
+            title_y = badge_box[3] + max(12, int(14 * scale))
+            draw.text(
+                (pad, title_y),
+                title,
+                fill=(15, 23, 42, 255),
+            )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(16, min(42, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(18, int(24 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "story_beat":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            stage = str(item.get("beat_stage", "") or "").strip().upper() or "SETUP"
+            stage_h = max(18, int(24 * scale))
+            stage_w = min(rel_w - (pad * 2), max(74, int(len(stage) * 7 * scale) + int(22 * scale)))
+            stage_box = [pad, band_h + max(8, int(10 * scale)), pad + stage_w, band_h + max(8, int(10 * scale)) + stage_h]
+            draw.rounded_rectangle(stage_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((stage_box[0] + stage_box[2]) / 2.0, (stage_box[1] + stage_box[3]) / 2.0),
+                stage,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            title = str(item.get("label", "") or "").strip() or "Story Beat"
+            if len(title) > 34:
+                title = f"{title[:31]}..."
+            title_y = stage_box[3] + max(12, int(14 * scale))
+            draw.text((pad, title_y), title, fill=(15, 23, 42, 255))
+            copy = str(item.get("content", "") or "").strip()
+            if copy:
+                max_chars = max(16, min(44, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(copy, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(18, int(24 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "swatch_strip":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            pad = max(12, int(16 * scale))
+            title = str(item.get("label", "") or "").strip() or "Swatch Strip"
+            if len(title) > 28:
+                title = f"{title[:25]}..."
+            draw.text((pad, pad), title, fill=(15, 23, 42, 255))
+            raw_swatches = item.get("swatches") or ["#f4efe6", "#cab9a5", "#7a8795", "#1f2937"]
+            swatches = []
+            for value in raw_swatches:
+                rgb = self._hex_to_rgb(value, fallback=None)
+                if rgb:
+                    swatches.append(rgb)
+            if not swatches:
+                swatches = [(244, 239, 230), (202, 185, 165), (122, 135, 149), (31, 41, 55)]
+            gap = max(6, int(8 * scale))
+            swatch_y = pad + max(18, int(22 * scale))
+            swatch_h = max(34, int(48 * scale))
+            swatch_w = max(22, int((rel_w - (pad * 2) - (gap * (len(swatches) - 1))) / max(1, len(swatches))))
+            cursor_x = pad
+            for rgb in swatches[:6]:
+                draw.rounded_rectangle(
+                    [cursor_x, swatch_y, cursor_x + swatch_w, swatch_y + swatch_h],
+                    radius=max(6, int(10 * scale)),
+                    fill=(*rgb, 255),
+                    outline=(15, 23, 42, 20),
+                )
+                cursor_x += swatch_w + gap
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                if len(note) > 54:
+                    note = f"{note[:51]}..."
+                draw.text(
+                    (pad, swatch_y + swatch_h + max(10, int(12 * scale))),
+                    note,
+                    fill=(71, 85, 105, 255),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "scene_divider":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            center_y = max(14, int(rel_h * 0.34))
+            draw.line(
+                [(0, center_y), (rel_w, center_y)],
+                fill=(255, 255, 255, 56),
+                width=max(1, int(2 * scale)),
+            )
+            label = str(item.get("label", "") or "").strip().upper() or "SCENE DIVIDER"
+            if len(label) > 26:
+                label = f"{label[:23]}..."
+            badge_h = max(22, int(28 * scale))
+            badge_w = min(rel_w - max(20, int(24 * scale)), max(120, int(len(label) * 8 * scale) + int(34 * scale)))
+            badge_x0 = int((rel_w - badge_w) / 2)
+            badge_box = [badge_x0, max(6, int(8 * scale)), badge_x0 + badge_w, max(6, int(8 * scale)) + badge_h]
+            draw.rounded_rectangle(
+                badge_box,
+                radius=max(10, int(14 * scale)),
+                fill=(*accent_rgb, 255),
+            )
+            draw.text(
+                ((badge_box[0] + badge_box[2]) / 2.0, (badge_box[1] + badge_box[3]) / 2.0),
+                label,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            subtitle = str(item.get("content", "") or "").strip()
+            if subtitle:
+                if len(subtitle) > 42:
+                    subtitle = f"{subtitle[:39]}..."
+                draw.text(
+                    (rel_w / 2.0, badge_box[3] + max(10, int(12 * scale))),
+                    subtitle,
+                    fill=(226, 232, 240, 192),
+                    anchor="ma",
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "character_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(10, 15, 24, 246),
+                outline=(36, 45, 60, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            role = str(item.get("character_role", "") or "").strip().upper() or "LEAD"
+            role_h = max(18, int(24 * scale))
+            role_w = min(rel_w - (pad * 2), max(66, int(len(role) * 7 * scale) + int(22 * scale)))
+            role_box = [rel_w - pad - role_w, band_h + max(8, int(10 * scale)), rel_w - pad, band_h + max(8, int(10 * scale)) + role_h]
+            draw.rounded_rectangle(role_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((role_box[0] + role_box[2]) / 2.0, (role_box[1] + role_box[3]) / 2.0),
+                role,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text(
+                (pad, band_h + max(14, int(18 * scale))),
+                "CHARACTER",
+                fill=(203, 213, 225, 165),
+            )
+            name = str(item.get("label", "") or "").strip() or "Character Card"
+            if len(name) > 26:
+                name = f"{name[:23]}..."
+            name_y = role_box[3] + max(12, int(14 * scale))
+            draw.text((pad, name_y), name, fill=(248, 250, 252, 255))
+            look = str(item.get("look", "") or "").strip()
+            if look:
+                max_chars = max(16, min(42, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(look, width=max_chars)
+                draw.multiline_text(
+                    (pad, name_y + max(18, int(24 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 212),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(44, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, rel_h - max(46, int(52 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 176),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "location_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(250, 246, 240, 252),
+                outline=(219, 224, 230, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            time_of_day = str(item.get("time_of_day", "") or "").strip().upper() or "NIGHT"
+            time_h = max(18, int(24 * scale))
+            time_w = min(rel_w - (pad * 2), max(72, int(len(time_of_day) * 7 * scale) + int(22 * scale)))
+            time_box = [pad + stripe_w, pad, pad + stripe_w + time_w, pad + time_h]
+            draw.rounded_rectangle(time_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((time_box[0] + time_box[2]) / 2.0, (time_box[1] + time_box[3]) / 2.0),
+                time_of_day,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text(
+                (rel_w - pad, pad + (time_h / 2.0)),
+                "Location",
+                fill=(100, 116, 139, 255),
+                anchor="rm",
+            )
+            title = str(item.get("label", "") or "").strip() or "Location Card"
+            if len(title) > 28:
+                title = f"{title[:25]}..."
+            title_y = time_box[3] + max(12, int(14 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(15, 23, 42, 255))
+            atmosphere = str(item.get("content", "") or "").strip()
+            if atmosphere:
+                max_chars = max(16, min(40, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(atmosphere, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, title_y + max(18, int(24 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "dialogue_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(17, 24, 39, 248),
+                outline=(39, 48, 64, 255),
+                width=max(1, int(2 * scale)),
+            )
+            pad = max(12, int(16 * scale))
+            speaker = str(item.get("label", "") or "").strip().upper() or "SPEAKER"
+            speaker_h = max(18, int(24 * scale))
+            speaker_w = min(rel_w - (pad * 2), max(72, int(len(speaker) * 7 * scale) + int(22 * scale)))
+            speaker_box = [pad, pad, pad + speaker_w, pad + speaker_h]
+            draw.rounded_rectangle(speaker_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((speaker_box[0] + speaker_box[2]) / 2.0, (speaker_box[1] + speaker_box[3]) / 2.0),
+                speaker,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            delivery = str(item.get("delivery", "") or "").strip().upper()
+            if delivery:
+                draw.text(
+                    (rel_w - pad, pad + (speaker_h / 2.0)),
+                    delivery,
+                    fill=(203, 213, 225, 170),
+                    anchor="rm",
+                )
+            draw.text(
+                (pad, speaker_box[3] + max(6, int(6 * scale))),
+                "“",
+                fill=(*accent_rgb, 255),
+            )
+            line_text = str(item.get("line_text", "") or "").strip() or "Dialogue line"
+            max_chars = max(18, min(48, rel_w // max(7, int(8 * scale))))
+            wrapped = textwrap.fill(line_text, width=max_chars)
+            draw.multiline_text(
+                (pad + max(12, int(14 * scale)), speaker_box[3] + max(18, int(22 * scale))),
+                wrapped,
+                fill=(248, 250, 252, 240),
+                spacing=max(3, int(4 * scale)),
+            )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "camera_move":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            move_type = str(item.get("move_type", "") or "").strip().upper() or "STATIC"
+            move_h = max(18, int(24 * scale))
+            move_w = min(rel_w - (pad * 2), max(74, int(len(move_type) * 7 * scale) + int(22 * scale)))
+            move_box = [pad + stripe_w, pad, pad + stripe_w + move_w, pad + move_h]
+            draw.rounded_rectangle(move_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((move_box[0] + move_box[2]) / 2.0, (move_box[1] + move_box[3]) / 2.0),
+                move_type,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            duration = str(item.get("duration", "") or "").strip().upper()
+            if duration:
+                duration_w = min(
+                    rel_w - move_box[2] - (pad * 2),
+                    max(54, int(len(duration) * 7 * scale) + int(18 * scale))
+                )
+                duration_box = [move_box[2] + max(8, int(8 * scale)), pad, move_box[2] + max(8, int(8 * scale)) + duration_w, pad + move_h]
+                draw.rounded_rectangle(
+                    duration_box,
+                    radius=max(8, int(12 * scale)),
+                    fill=(15, 23, 42, 14),
+                    outline=(15, 23, 42, 24),
+                )
+                draw.text(
+                    ((duration_box[0] + duration_box[2]) / 2.0, (duration_box[1] + duration_box[3]) / 2.0),
+                    duration,
+                    fill=(71, 85, 105, 255),
+                    anchor="mm",
+                )
+            title = str(item.get("label", "") or "").strip() or "Camera Move"
+            if len(title) > 44:
+                title = f"{title[:41]}..."
+            title_y = move_box[3] + max(10, int(12 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(15, 23, 42, 255))
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(20, min(56, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, title_y + max(14, int(18 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "frame":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            rgb = self._hex_to_rgb(item.get("color", DEFAULT_FRAME_COLOR))
+            presentation = self._frame_presentation(item)
+            scene_code, title, subtitle = self._frame_header_meta(item)
+            frame_box = [0, 0, rel_w - 1, rel_h - 1]
+            frame_radius = max(8, int(14 * scale))
+            border_width = max(1, int(3 * scale))
+
+            if presentation == "board":
+                shadow_offset = max(4, int(8 * scale))
+                draw.rounded_rectangle(
+                    [shadow_offset, shadow_offset, rel_w - 1, rel_h - 1],
+                    radius=frame_radius,
+                    fill=(0, 0, 0, 34),
+                )
+                draw.rounded_rectangle(
+                    frame_box,
+                    radius=frame_radius,
+                    fill=(250, 246, 240, 225),
+                    outline=(*rgb, 230),
+                    width=border_width,
+                )
+            elif presentation == "spotlight":
+                draw.rounded_rectangle(
+                    frame_box,
+                    radius=frame_radius,
+                    fill=(15, 23, 42, 132),
+                    outline=(*rgb, 240),
+                    width=border_width,
+                )
+            else:
+                draw.rounded_rectangle(
+                    frame_box,
+                    radius=frame_radius,
+                    fill=(*rgb, 20),
+                    outline=(*rgb, 235),
+                    width=border_width,
+                )
+            if presentation in {"board", "spotlight"}:
+                badge_y = max(10, int(14 * scale))
+                badge_h = max(22, int(28 * scale))
+                cursor_x = max(10, int(14 * scale))
+                if scene_code:
+                    badge_w = min(rel_w - (cursor_x * 2), max(48, int(len(scene_code) * 7 * scale) + int(20 * scale)))
+                    badge_box = [cursor_x, badge_y, cursor_x + badge_w, badge_y + badge_h]
+                    draw.rounded_rectangle(
+                        badge_box,
+                        radius=max(10, int(14 * scale)),
+                        fill=(*rgb, 245),
+                    )
+                    draw.text(
+                        ((badge_box[0] + badge_box[2]) / 2.0, (badge_box[1] + badge_box[3]) / 2.0),
+                        scene_code,
+                        fill=self._text_color_for_bg(rgb),
+                        anchor="mm",
+                    )
+                    cursor_x = badge_box[2] + max(8, int(8 * scale))
+                if title:
+                    title_w = min(
+                        rel_w - cursor_x - max(10, int(14 * scale)),
+                        max(96, int(len(title) * 8 * scale) + int(26 * scale))
+                    )
+                    title_box = [cursor_x, badge_y, max(cursor_x + 32, cursor_x + title_w), badge_y + badge_h]
+                    draw.rounded_rectangle(
+                        title_box,
+                        radius=max(10, int(14 * scale)),
+                        fill=(*rgb, 245),
+                    )
+                    draw.text(
+                        ((title_box[0] + title_box[2]) / 2.0, (title_box[1] + title_box[3]) / 2.0),
+                        title,
+                        fill=self._text_color_for_bg(rgb),
+                        anchor="mm",
+                    )
+                if subtitle:
+                    subtitle_y = badge_y + badge_h + max(6, int(8 * scale))
+                    draw.text(
+                        (max(10, int(14 * scale)), subtitle_y),
+                        subtitle,
+                        fill=(245, 245, 245, 235) if presentation == "spotlight" else (255, 250, 242, 240),
+                    )
+            else:
+                header_y = max(12, int(14 * scale))
+                header_x = max(12, int(16 * scale))
+                header_parts = [part for part in [scene_code, title] if part]
+                header_text = "  ".join(header_parts)
+                if header_text:
+                    draw.text(
+                        (header_x, header_y),
+                        header_text,
+                        fill=(*rgb, 255),
+                    )
+                if subtitle:
+                    draw.text(
+                        (header_x, header_y + max(14, int(18 * scale))),
+                        subtitle,
+                        fill=(232, 232, 235, 230),
+                    )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+
+    def render_board_preview(self, board_id, item_ids=None, scale=1.0, padding=32, max_side=1536):
+        board_data = self.get_board(board_id)
+        items = board_data.get("items", [])
+        if item_ids is not None:
+            wanted_ids = set(item_ids)
+            items = [item for item in items if item.get("id") in wanted_ids]
+
+        render_items = [
+            item for item in items
+            if all(key in item for key in ("x", "y", "w", "h"))
+        ]
+        if not render_items:
+            return None
+
+        visual_bounds = [self._item_render_bounds(item) for item in render_items]
+        min_x = min(bounds[0] for bounds in visual_bounds)
+        min_y = min(bounds[1] for bounds in visual_bounds)
+        max_x = max(bounds[2] for bounds in visual_bounds)
+        max_y = max(bounds[3] for bounds in visual_bounds)
+
+        content_w = max(1, int(round((max_x - min_x) * scale)))
+        content_h = max(1, int(round((max_y - min_y) * scale)))
+        longest_side = max(content_w, content_h)
+        if longest_side > max_side:
+            fit_scale = max_side / float(longest_side)
+            scale *= fit_scale
+            content_w = max(1, int(round((max_x - min_x) * scale)))
+            content_h = max(1, int(round((max_y - min_y) * scale)))
+
+        canvas = Image.new("RGBA", (content_w + (padding * 2), content_h + (padding * 2)), (18, 18, 20, 255))
+
+        for item in self._sorted_render_items(render_items):
+            rel_x = int(round((item["x"] - min_x) * scale)) + padding
+            rel_y = int(round((item["y"] - min_y) * scale)) + padding
+            rel_w = int(round(item["w"] * scale))
+            rel_h = int(round(item["h"] * scale))
+            self._draw_item_to_canvas(canvas, board_id, item, rel_x, rel_y, rel_w, rel_h, scale=scale)
+
+        return canvas.convert("RGB")
+
     def flatten_frame(self, board_id, frame_id, scale=2.0):
         board_data = self.get_board(board_id)
         frame = next((i for i in board_data["items"] if i["id"] == frame_id), None)
@@ -136,120 +1053,28 @@ class StoryboardStore:
                 contained_items.append(item)
 
         # Create base image with higher resolution
-        from PIL import Image, ImageDraw, ImageFont
         canvas_w = int(frame["w"] * scale)
         canvas_h = int(frame["h"] * scale)
         canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(canvas)
 
         # Draw frame background
-        bg_color = frame.get("color", "#4CAF50")
+        bg_color = frame.get("color", DEFAULT_FRAME_COLOR)
         if bg_color.startswith("#"):
             hex_color = bg_color.lstrip('#')
             rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
             draw.rectangle([0, 0, canvas_w, canvas_h], fill=(*rgb, 26)) # 10% opacity
             draw.rectangle([0, 0, canvas_w, canvas_h], outline=(*rgb, 255), width=int(3 * scale))
 
-        # Draw items in order they appear in board data
+        # Draw items in board order so exported frame previews match the canvas layering.
         assets_path = self._get_assets_path(board_id)
-        for item in contained_items:
+        os.makedirs(assets_path, exist_ok=True)
+        for item in self._sorted_render_items(contained_items):
             rel_x = int((item["x"] - frame["x"]) * scale)
             rel_y = int((item["y"] - frame["y"]) * scale)
             rel_w = int(item["w"] * scale)
             rel_h = int(item["h"] * scale)
-
-            if item["type"] == "image" and item.get("image_ref"):
-                img_path = os.path.join(assets_path, item["image_ref"])
-                if os.path.exists(img_path):
-                    try:
-                        img = Image.open(img_path).convert("RGBA")
-                        
-                        # Apply crop if present
-                        crop = item.get("crop")
-                        if crop:
-                            w, h = img.size
-                            left = int(crop["x"] * w)
-                            top = int(crop["y"] * h)
-                            right = int((crop["x"] + crop["w"]) * w)
-                            bottom = int((crop["y"] + crop["h"]) * h)
-                            left = max(0, min(w - 1, left))
-                            top = max(0, min(h - 1, top))
-                            right = max(left + 1, min(w, right))
-                            bottom = max(top + 1, min(h, bottom))
-                            img = img.crop((left, top, right, bottom))
-
-                        # Use LANCZOS for high quality resizing
-                        img = img.resize((rel_w, rel_h), Image.Resampling.LANCZOS)
-                        
-                        # Apply rounded corners
-                        mask = Image.new("L", (rel_w, rel_h), 0)
-                        mask_draw = ImageDraw.Draw(mask)
-                        mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=int(12 * scale), fill=255)
-                        
-                        temp_canvas = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-                        temp_canvas.paste(img, (0, 0), mask)
-                        canvas.alpha_composite(temp_canvas, (rel_x, rel_y))
-                    except Exception as e:
-                        print(f"Error drawing image in flatten: {e}")
-            elif item["type"] == "video" and item.get("video_ref"):
-                mask = Image.new("L", (rel_w, rel_h), 0)
-                mask_draw = ImageDraw.Draw(mask)
-                mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=int(12 * scale), fill=255)
-                video_img = Image.new("RGBA", (rel_w, rel_h), (36, 36, 40, 255))
-                canvas.paste(video_img, (rel_x, rel_y), mask)
-                video_draw = ImageDraw.Draw(canvas)
-                icon_size = max(10, int(min(rel_w, rel_h) * 0.22))
-                cx = rel_x + rel_w // 2
-                cy = rel_y + rel_h // 2
-                triangle = [
-                    (cx - icon_size // 2, cy - icon_size),
-                    (cx - icon_size // 2, cy + icon_size),
-                    (cx + icon_size, cy),
-                ]
-                video_draw.polygon(triangle, fill=(255, 255, 255, 220))
-                label = item.get("label", "Video")
-                if label:
-                    video_draw.text((cx, rel_y + rel_h - int(16 * scale)), label, fill=(235, 235, 235, 255), anchor="ms")
-            elif item["type"] == "note":
-                color = item.get("color", "#ffeb3b")
-                if color.startswith("#"):
-                    hex_c = color.lstrip('#')
-                    rgb = tuple(int(hex_c[i:i+2], 16) for i in (0, 2, 4))
-                    
-                    mask = Image.new("L", (rel_w, rel_h), 0)
-                    mask_draw = ImageDraw.Draw(mask)
-                    mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=int(12 * scale), fill=255)
-                    
-                    note_img = Image.new("RGBA", (rel_w, rel_h), (*rgb, 255))
-                    canvas.paste(note_img, (rel_x, rel_y), mask)
-                    
-                    # Add text to note
-                    content = item.get("content", "")
-                    if content:
-                        note_draw = ImageDraw.Draw(canvas)
-                        text_len = len(content)
-                        area = rel_w * rel_h
-                        font_size = int(np.sqrt(area / (text_len or 1)) * 0.8)
-                        font_size = max(int(12 * scale), min(font_size, int(rel_h * 0.5)))
-                        
-                        try:
-                            font = ImageFont.load_default()
-                        except:
-                            font = ImageFont.load_default()
-                            
-                        note_draw.text((rel_x + rel_w/2, rel_y + rel_h/2), content, fill=(0,0,0,255), anchor="mm")
-
-            elif item["type"] == "slot":
-                mask = Image.new("L", (rel_w, rel_h), 0)
-                mask_draw = ImageDraw.Draw(mask)
-                mask_draw.rounded_rectangle([0, 0, rel_w, rel_h], radius=int(12 * scale), fill=255)
-                
-                slot_img = Image.new("RGBA", (rel_w, rel_h), (26, 26, 26, 255))
-                canvas.paste(slot_img, (rel_x, rel_y), mask)
-                
-                # Add label
-                slot_draw = ImageDraw.Draw(canvas)
-                slot_draw.text((rel_x + rel_w/2, rel_y + rel_h/2), item.get("label", "Slot"), fill=(255,255,255,255), anchor="mm")
+            self._draw_item_to_canvas(canvas, board_id, item, rel_x, rel_y, rel_w, rel_h, scale=scale)
 
         # Save result
         filename = f"flattened_{uuid.uuid4()}.png"
@@ -287,14 +1112,7 @@ class StoryboardStore:
             if os.path.exists(img_path):
                 try:
                     img = Image.open(img_path).convert("RGB")
-                    crop = item.get("crop")
-                    if crop:
-                        w, h = img.size
-                        left = int(crop["x"] * w)
-                        top = int(crop["y"] * h)
-                        right = int((crop["x"] + crop["w"]) * w)
-                        bottom = int((crop["y"] + crop["h"]) * h)
-                        img = img.crop((left, top, right, bottom))
+                    img = apply_normalized_crop(img, item.get("crop"))
                     
                     img = img.resize((100, 100), Image.Resampling.NEAREST)
                     combined_img.paste(img, (valid_images * 100, 0))
@@ -343,18 +1161,7 @@ class StoryboardStore:
             return {"colors": [], "filename": None, "width": 0, "height": 0}
 
         img = Image.open(img_path).convert("RGB")
-        crop = item.get("crop")
-        if crop:
-            w, h = img.size
-            left = int(crop["x"] * w)
-            top = int(crop["y"] * h)
-            right = int((crop["x"] + crop["w"]) * w)
-            bottom = int((crop["y"] + crop["h"]) * h)
-            left = max(0, min(w - 1, left))
-            top = max(0, min(h - 1, top))
-            right = max(left + 1, min(w, right))
-            bottom = max(top + 1, min(h, bottom))
-            img = img.crop((left, top, right, bottom))
+        img = apply_normalized_crop(img, item.get("crop"))
 
         sample = img.resize((200, 200), Image.Resampling.NEAREST)
         quantized = sample.convert("P", palette=Image.Palette.ADAPTIVE, colors=num_colors).convert("RGB")

@@ -2,6 +2,205 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { createImageItem, createVideoItem } from "./storyboard_item_utils.js";
 import { copyTextToClipboard } from "./storyboard_clipboard.js";
+import { DEFAULT_FRAME_COLOR } from "./storyboard/design_system.js";
+import {
+    getGridOverlayStyles,
+    snapPointToGrid,
+    snapSizeToGrid,
+} from "./storyboard/grid.js";
+import { normalizeStoryboardSettings, snapValueToGrid } from "./storyboard/settings.js";
+import {
+    isStoryboardCoreExtension,
+    loadStoryboardExtensionFavorites,
+    matchesStoryboardExtensionQuery,
+    saveStoryboardExtensionFavorites,
+    STORYBOARD_MAX_PINNED_EXTENSIONS,
+} from "./storyboard/extension_picker.js";
+import { createStoryboardExtensionRegistry } from "./storyboard/extensions/registry.js";
+import { coreStoryboardExtensions } from "./storyboard/extensions/core/index.js";
+import { customStoryboardExtensions } from "./storyboard/extensions/custom/index.js";
+import {
+    arrangeItemsAsMoodboard as arrangeMoodboardLayout,
+    arrangeItemsAsStack as arrangeStackLayout,
+    arrangeItemsAsStoryStrip as arrangeStoryStripLayout,
+    getItemRotation as getStoryboardItemRotation,
+    getItemsBounds as getStoryboardItemsBounds,
+    isStoryboardContentItem,
+    isStoryboardTiltableItem,
+    normalizeRotation as normalizeStoryboardRotation,
+    setItemRotation as setStoryboardItemRotation,
+} from "./storyboard_layout_utils.js";
+import {
+    formatStoryboardSceneCode,
+    sortItemsByStoryboardOrder,
+} from "./storyboard_sequence_utils.js";
+import {
+    FRAME_PRESENTATION_OPTIONS,
+    getMediaCaptionText,
+    getFramePresentation as getStoryboardFramePresentation,
+    getMediaPresentation as getStoryboardMediaPresentation,
+    isFramePresentationItem,
+    isMediaPresentationItem,
+    MEDIA_PRESENTATION_OPTIONS,
+    setFramePresentation as setStoryboardFramePresentation,
+    setMediaPresentation as setStoryboardMediaPresentation,
+} from "./storyboard_surface_utils.js";
+
+const TOOLBAR_ICONS = {
+    slot: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="4.5" width="15" height="15" rx="3"></rect>
+            <path d="M12 8.5v7"></path>
+            <path d="M8.5 12h7"></path>
+        </svg>
+    `,
+    note: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M7 4.5h10a2.5 2.5 0 0 1 2.5 2.5v10L15.5 20H7A2.5 2.5 0 0 1 4.5 17V7A2.5 2.5 0 0 1 7 4.5Z"></path>
+            <path d="M15.5 20v-3h4"></path>
+            <path d="M12 8.5v5"></path>
+            <path d="M9.5 11h5"></path>
+        </svg>
+    `,
+    frame: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="6" width="15" height="12" rx="2.5"></rect>
+            <path d="M12 9v6"></path>
+            <path d="M9 12h6"></path>
+        </svg>
+    `,
+    delete: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4.5 7.5h15"></path>
+            <path d="M9.5 4.5h5"></path>
+            <path d="M8 7.5v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-10"></path>
+            <path d="M10 10.5v5"></path>
+            <path d="M14 10.5v5"></path>
+        </svg>
+    `,
+    settings: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3.2"></circle>
+            <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a2 2 0 0 1-4 0v-.1a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a2 2 0 0 1 0-4h.1a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a2 2 0 0 1 4 0v.1a1 1 0 0 0 .6.9h.1a1 1 0 0 0 1.1-.2l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6H20a2 2 0 0 1 0 4h-.1a1 1 0 0 0-.9.6Z"></path>
+        </svg>
+    `,
+    themeSystem: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v18"></path>
+            <path d="M12 5a7 7 0 0 1 0 14"></path>
+            <path d="M12 5a7 7 0 0 0 0 14"></path>
+        </svg>
+    `,
+    themeLight: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2.5v3"></path>
+            <path d="M12 18.5v3"></path>
+            <path d="M4.93 4.93l2.12 2.12"></path>
+            <path d="M16.95 16.95l2.12 2.12"></path>
+            <path d="M2.5 12h3"></path>
+            <path d="M18.5 12h3"></path>
+            <path d="M4.93 19.07l2.12-2.12"></path>
+            <path d="M16.95 7.05l2.12-2.12"></path>
+        </svg>
+    `,
+    themeDark: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 14.5A7.5 7.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"></path>
+        </svg>
+    `,
+    moodTag: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h8l3.5 3.5v8A2.5 2.5 0 0 1 16.5 19h-9A2.5 2.5 0 0 1 5 16.5Z"></path>
+            <path d="M9 10h6"></path>
+            <path d="M9 13.5h4"></path>
+        </svg>
+    `,
+    shotCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="5" width="15" height="14" rx="3"></rect>
+            <path d="M8 9h8"></path>
+            <path d="M8 12.5h5"></path>
+            <path d="M8 16h8"></path>
+        </svg>
+    `,
+    storyBeat: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="4.5" width="15" height="15" rx="3"></rect>
+            <path d="M8 8.5h8"></path>
+            <path d="M8 12h8"></path>
+            <path d="M8 15.5h5"></path>
+        </svg>
+    `,
+    swatchStrip: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="7" width="15" height="10" rx="3"></rect>
+            <path d="M8.5 7v10"></path>
+            <path d="M12 7v10"></path>
+            <path d="M15.5 7v10"></path>
+        </svg>
+    `,
+    sceneDivider: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 12h5"></path>
+            <path d="M15 12h5"></path>
+            <rect x="9" y="8.5" width="6" height="7" rx="3"></rect>
+        </svg>
+    `,
+    demoPack: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="5" width="7" height="6" rx="2"></rect>
+            <rect x="12.5" y="5" width="7" height="6" rx="2"></rect>
+            <rect x="4.5" y="13" width="15" height="6" rx="2"></rect>
+        </svg>
+    `,
+    characterCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="8" r="3"></circle>
+            <path d="M6.5 18.5c1.6-3 3.5-4.5 5.5-4.5s3.9 1.5 5.5 4.5"></path>
+            <path d="M4.5 5.5v13"></path>
+        </svg>
+    `,
+    locationCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20s5-5.5 5-9.2A5 5 0 1 0 7 10.8C7 14.5 12 20 12 20Z"></path>
+            <circle cx="12" cy="10" r="1.8"></circle>
+        </svg>
+    `,
+    dialogueCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 7.5h8a3.5 3.5 0 0 1 3.5 3.5v4A3.5 3.5 0 0 1 14 18.5H10l-4 2v-5A3.5 3.5 0 0 1 2.5 12V11A3.5 3.5 0 0 1 6 7.5Z"></path>
+            <path d="M8 12h4"></path>
+            <path d="M8 15h6"></path>
+        </svg>
+    `,
+    cameraMove: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="7" width="6.5" height="10" rx="2"></rect>
+            <path d="M13.5 9.5h4"></path>
+            <path d="M15.5 7.5l2 2-2 2"></path>
+            <path d="M13.5 14.5h4"></path>
+            <path d="M15.5 12.5l2 2-2 2"></path>
+        </svg>
+    `,
+    picker: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="10.5" cy="10.5" r="5.5"></circle>
+            <path d="M15 15l4.5 4.5"></path>
+            <path d="M10.5 8v5"></path>
+            <path d="M8 10.5h5"></path>
+        </svg>
+    `,
+    pin: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 4.5h6"></path>
+            <path d="M8 9.5h8"></path>
+            <path d="M9.5 9.5v4.5l-2 2"></path>
+            <path d="M14.5 9.5v4.5l2 2"></path>
+            <path d="M12 15v5"></path>
+        </svg>
+    `,
+};
 
 // Load CSS
 const link = document.createElement("link");
@@ -50,6 +249,8 @@ class StoryboardWorkspace {
         this.themeMode = this.normalizeThemeMode(localStorage.getItem("storyboard.themeMode"));
         this.systemThemeQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
         this.fontOptions = this.getDefaultFontOptions();
+        this.extensionRegistry = createStoryboardExtensionRegistry(coreStoryboardExtensions, customStoryboardExtensions);
+        this.extensionFavorites = loadStoryboardExtensionFavorites(this.extensionRegistry.listToolbarExtensions());
         this.boardId = "default";
         this.node = null;
         this.boardData = null;
@@ -62,6 +263,9 @@ class StoryboardWorkspace {
         this.internalClipboard = [];
         this.needsReload = false;
         this.inspectorOpen = false;
+        this.settingsOpen = false;
+        this.extensionPickerOpen = false;
+        this.extensionPickerStatus = "";
         this.createWindow();
         this.refreshFontOptions();
 
@@ -70,6 +274,10 @@ class StoryboardWorkspace {
             if (this.overlay.style.display === "flex") {
                 if (e.key === "Escape") {
                     e.preventDefault();
+                    if (this.extensionPickerOpen) {
+                        this.closeExtensionPicker();
+                        return;
+                    }
                     this.hide();
                     return;
                 }
@@ -105,6 +313,294 @@ class StoryboardWorkspace {
         });
     }
 
+    getToolbarExtensions() {
+        return this.extensionRegistry.listToolbarExtensions();
+    }
+
+    getExtensionToolbarLabel(extension) {
+        return extension?.toolbar?.label || extension?.title || extension?.type || "Storyboard Item";
+    }
+
+    getExtensionToolbarTitle(extension) {
+        return extension?.toolbar?.title || this.getExtensionToolbarLabel(extension);
+    }
+
+    getExtensionIconMarkup(extension) {
+        const toolbar = extension?.toolbar || {};
+        return toolbar.iconSvg || (toolbar.iconKey ? TOOLBAR_ICONS[toolbar.iconKey] : "") || "";
+    }
+
+    getExtensionPickerSubtitle(extension) {
+        const kind = typeof extension?.createItem === "function" ? "Widget" : "Action";
+        const section = extension?.toolbar?.section || "Insert";
+        return `${section} · ${kind}`;
+    }
+
+    createToolbarExtensionButton(extension, extraClassName = "") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `storyboard-tool-btn storyboard-create-btn${extraClassName ? ` ${extraClassName}` : ""}`;
+        button.title = this.getExtensionToolbarTitle(extension);
+        const iconMarkup = this.getExtensionIconMarkup(extension);
+        button.innerHTML = `
+            ${iconMarkup ? `<span class="toolbar-glyph">${iconMarkup}</span>` : ""}
+            <span>${this.getExtensionToolbarLabel(extension)}</span>
+        `;
+        button.onclick = () => {
+            void this.runToolbarExtension(extension.type);
+        };
+        return button;
+    }
+
+    getCoreToolbarExtensions() {
+        return this.getToolbarExtensions().filter((extension) => isStoryboardCoreExtension(extension));
+    }
+
+    getFavoriteToolbarExtensions() {
+        const extensionsByType = new Map(
+            this.getToolbarExtensions().map((extension) => [extension.type, extension]),
+        );
+        return this.extensionFavorites
+            .map((type) => extensionsByType.get(type))
+            .filter((extension) => extension && !isStoryboardCoreExtension(extension));
+    }
+
+    renderToolbarExtensions() {
+        if (!this.coreToolbarRail || !this.favoriteToolbarRail) return;
+
+        const coreButtons = this.getCoreToolbarExtensions().map((extension) => (
+            this.createToolbarExtensionButton(extension)
+        ));
+        this.coreToolbarRail.replaceChildren(...coreButtons);
+
+        const favoriteButtons = this.getFavoriteToolbarExtensions().map((extension) => {
+            const button = this.createToolbarExtensionButton(extension, "storyboard-favorite-btn");
+            button.title = `Pinned Favorite: ${this.getExtensionToolbarTitle(extension)}`;
+            return button;
+        });
+        this.favoriteToolbarRail.replaceChildren(...favoriteButtons);
+        this.favoriteToolbarRail.classList.toggle("has-items", favoriteButtons.length > 0);
+    }
+
+    setExtensionPickerStatus(message = "") {
+        this.extensionPickerStatus = message;
+        if (this.extensionPickerStatusEl) {
+            this.extensionPickerStatusEl.textContent = this.extensionPickerStatus || "Click any node or widget to add it. Right-click to pin it to the top bar.";
+        }
+    }
+
+    getFilteredPickerSections(query = "") {
+        const favoriteSet = new Set(this.extensionFavorites);
+        const favoriteOrder = new Map(this.extensionFavorites.map((type, index) => [type, index]));
+        const sectionOrder = [];
+        const sections = new Map();
+
+        this.getToolbarExtensions()
+            .filter((extension) => matchesStoryboardExtensionQuery(extension, query))
+            .forEach((extension) => {
+                const section = extension?.toolbar?.section || "Insert";
+                if (!sections.has(section)) {
+                    sections.set(section, []);
+                    sectionOrder.push(section);
+                }
+                sections.get(section).push(extension);
+            });
+
+        return sectionOrder.map((section) => ({
+            section,
+            extensions: sections.get(section).slice().sort((left, right) => {
+                const favoriteDelta = Number(favoriteSet.has(right.type)) - Number(favoriteSet.has(left.type));
+                if (favoriteDelta) return favoriteDelta;
+                if (favoriteSet.has(left.type) && favoriteSet.has(right.type)) {
+                    return (favoriteOrder.get(left.type) ?? 0) - (favoriteOrder.get(right.type) ?? 0);
+                }
+                return this.getExtensionToolbarLabel(left).localeCompare(
+                    this.getExtensionToolbarLabel(right),
+                    undefined,
+                    { sensitivity: "base" },
+                );
+            }),
+        }));
+    }
+
+    createExtensionPickerItem(extension) {
+        const button = document.createElement("button");
+        button.type = "button";
+        const isFavorite = this.extensionFavorites.includes(extension.type);
+        const isCore = isStoryboardCoreExtension(extension);
+        button.className = "storyboard-picker-item";
+        button.classList.toggle("is-favorite", isFavorite);
+        button.classList.toggle("is-core", isCore);
+        button.title = `${this.getExtensionToolbarTitle(extension)}\nClick to add it. Right-click to ${isFavorite ? "unpin" : "pin"}.`;
+
+        const iconMarkup = this.getExtensionIconMarkup(extension);
+        const pinLabel = isCore ? "Core" : isFavorite ? "Pinned" : "Pin";
+        button.innerHTML = `
+            <span class="storyboard-picker-item-main">
+                ${iconMarkup ? `<span class="toolbar-glyph">${iconMarkup}</span>` : ""}
+                <span class="storyboard-picker-item-copy">
+                    <span class="storyboard-picker-item-label">${this.getExtensionToolbarLabel(extension)}</span>
+                    <span class="storyboard-picker-item-subtitle">${this.getExtensionPickerSubtitle(extension)}</span>
+                </span>
+            </span>
+            <span class="storyboard-picker-item-pin" aria-hidden="true">
+                <span class="toolbar-glyph">${TOOLBAR_ICONS.pin}</span>
+                <span class="storyboard-picker-item-pin-label">${pinLabel}</span>
+            </span>
+        `;
+
+        button.onclick = async () => {
+            this.closeExtensionPicker();
+            await this.runToolbarExtension(extension.type);
+        };
+        button.oncontextmenu = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.toggleExtensionFavorite(extension.type);
+        };
+        return button;
+    }
+
+    renderExtensionPicker() {
+        if (!this.extensionPickerList) return;
+        const query = this.extensionPickerSearchInput?.value || "";
+        const sections = this.getFilteredPickerSections(query);
+        const fragment = document.createDocumentFragment();
+        let resultCount = 0;
+
+        sections.forEach(({ section, extensions }) => {
+            if (!extensions.length) return;
+            resultCount += extensions.length;
+
+            const header = document.createElement("div");
+            header.className = "storyboard-picker-section-header";
+            header.textContent = section;
+            fragment.appendChild(header);
+
+            extensions.forEach((extension) => {
+                fragment.appendChild(this.createExtensionPickerItem(extension));
+            });
+        });
+
+        if (!resultCount) {
+            const emptyState = document.createElement("div");
+            emptyState.className = "storyboard-picker-empty";
+            emptyState.textContent = "No nodes or widgets match that search.";
+            fragment.appendChild(emptyState);
+        }
+
+        this.extensionPickerList.replaceChildren(fragment);
+        if (this.extensionPickerMeta) {
+            const resultLabel = `${resultCount} result${resultCount === 1 ? "" : "s"}`;
+            this.extensionPickerMeta.textContent = `${resultLabel} • ${this.extensionFavorites.length}/${STORYBOARD_MAX_PINNED_EXTENSIONS} pinned`;
+        }
+        this.setExtensionPickerStatus(this.extensionPickerStatus);
+    }
+
+    toggleExtensionFavorite(type) {
+        const extension = this.extensionRegistry.get(type);
+        if (!extension) return false;
+
+        const label = this.getExtensionToolbarLabel(extension);
+        if (isStoryboardCoreExtension(extension)) {
+            this.setExtensionPickerStatus(`${label} already stays pinned in the core toolbar.`);
+            this.renderExtensionPicker();
+            return false;
+        }
+
+        if (this.extensionFavorites.includes(type)) {
+            this.extensionFavorites = saveStoryboardExtensionFavorites(
+                this.extensionFavorites.filter((favoriteType) => favoriteType !== type),
+                this.getToolbarExtensions(),
+            );
+            this.setExtensionPickerStatus(`${label} removed from the top bar.`);
+            this.renderToolbarExtensions();
+            this.renderExtensionPicker();
+            return true;
+        }
+
+        if (this.extensionFavorites.length >= STORYBOARD_MAX_PINNED_EXTENSIONS) {
+            this.setExtensionPickerStatus(`Top-bar favorites are full. Unpin one before adding ${label}.`);
+            this.renderExtensionPicker();
+            return false;
+        }
+
+        this.extensionFavorites = saveStoryboardExtensionFavorites(
+            [...this.extensionFavorites, type],
+            this.getToolbarExtensions(),
+        );
+        this.setExtensionPickerStatus(`${label} pinned to the top bar.`);
+        this.renderToolbarExtensions();
+        this.renderExtensionPicker();
+        return true;
+    }
+
+    positionExtensionPicker({ anchorEl = null, clientX = null, clientY = null } = {}) {
+        if (!this.window || !this.extensionPicker) return;
+        const windowRect = this.window.getBoundingClientRect();
+        let left = 18;
+        let top = 72;
+
+        if (anchorEl) {
+            const anchorRect = anchorEl.getBoundingClientRect();
+            left = anchorRect.left - windowRect.left;
+            top = anchorRect.bottom - windowRect.top + 10;
+        }
+
+        if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
+            left = clientX - windowRect.left + 12;
+            top = clientY - windowRect.top + 12;
+        }
+
+        const pickerWidth = this.extensionPicker.offsetWidth || 360;
+        const pickerHeight = this.extensionPicker.offsetHeight || 440;
+        const maxLeft = Math.max(12, windowRect.width - pickerWidth - 12);
+        const maxTop = Math.max(64, windowRect.height - pickerHeight - 12);
+
+        this.extensionPicker.style.left = `${Math.min(maxLeft, Math.max(12, left))}px`;
+        this.extensionPicker.style.top = `${Math.min(maxTop, Math.max(64, top))}px`;
+    }
+
+    openExtensionPicker(options = {}) {
+        if (!this.extensionPicker) return;
+        this.contextMenu.style.display = "none";
+        this.extensionPickerOpen = true;
+        this.extensionPicker.classList.add("open");
+        if (this.extensionPickerSearchInput) {
+            this.extensionPickerSearchInput.value = "";
+        }
+        this.setExtensionPickerStatus("");
+        this.renderExtensionPicker();
+        this.positionExtensionPicker(options);
+        requestAnimationFrame(() => {
+            this.positionExtensionPicker(options);
+            this.extensionPickerSearchInput?.focus();
+            this.extensionPickerSearchInput?.select();
+        });
+    }
+
+    closeExtensionPicker() {
+        if (!this.extensionPicker) return;
+        this.extensionPickerOpen = false;
+        this.extensionPicker.classList.remove("open");
+        if (this.extensionPickerSearchInput) {
+            this.extensionPickerSearchInput.value = "";
+        }
+        this.setExtensionPickerStatus("");
+    }
+
+    toggleExtensionPicker(options = {}) {
+        if (this.extensionPickerOpen) {
+            this.closeExtensionPicker();
+            return;
+        }
+        this.openExtensionPicker(options);
+    }
+
+    isCanvasBackgroundTarget(target) {
+        return target === this.canvas || target === this.canvasContainer || target === this.gridLayer;
+    }
+
     createWindow() {
         this.overlay = document.createElement("div");
         this.overlay.className = "storyboard-overlay";
@@ -122,13 +618,28 @@ class StoryboardWorkspace {
                 <button id="storyboard-refresh-board" class="board-action-btn" title="Refresh Board">⟳ Refresh</button>
                 <button id="storyboard-new-board" class="board-action-btn" title="New Board">＋ New</button>
                 <button id="storyboard-rename-board" class="board-action-btn" title="Rename Board">✎ Rename</button>
-                <button id="storyboard-delete-board" class="board-action-btn danger" title="Delete Board">🗑 Delete</button>
+                <button id="storyboard-delete-board" class="board-action-btn danger" title="Delete Board">
+                    <span class="toolbar-glyph">${TOOLBAR_ICONS.delete}</span>
+                    <span>Delete</span>
+                </button>
             </div>
             <div class="storyboard-controls">
-                <button id="storyboard-add-slot">+ Add Slot</button>
-                <button id="storyboard-add-note">+ Add Note</button>
-                <button id="storyboard-add-frame">+ Add Frame</button>
-                <button id="storyboard-theme-toggle" class="storyboard-theme-toggle" title="Theme: System">◐</button>
+                <div class="storyboard-toolbar-rail">
+                    <div id="storyboard-core-tools" class="storyboard-toolbar-group"></div>
+                    <div id="storyboard-favorite-tools" class="storyboard-toolbar-group storyboard-toolbar-favorites"></div>
+                </div>
+                <button id="storyboard-open-picker" class="storyboard-tool-btn storyboard-create-btn" title="Open the node and widget picker">
+                    <span class="toolbar-glyph">${TOOLBAR_ICONS.picker}</span>
+                    <span>Add Node/Widget</span>
+                </button>
+                <button id="storyboard-settings-toggle" class="storyboard-tool-btn storyboard-create-btn" title="Storyboard Settings">
+                    <span class="toolbar-glyph">${TOOLBAR_ICONS.settings}</span>
+                    <span>Settings</span>
+                </button>
+                <button id="storyboard-theme-toggle" class="storyboard-tool-btn storyboard-create-btn storyboard-theme-toggle" title="Theme: System">
+                    <span id="storyboard-theme-toggle-glyph" class="toolbar-glyph">${TOOLBAR_ICONS.themeSystem}</span>
+                    <span id="storyboard-theme-toggle-label">System</span>
+                </button>
                 <button id="storyboard-close">✕</button>
             </div>
         `;
@@ -138,6 +649,9 @@ class StoryboardWorkspace {
         
         this.canvasContainer = document.createElement("div");
         this.canvasContainer.className = "storyboard-canvas-container";
+
+        this.gridLayer = document.createElement("div");
+        this.gridLayer.className = "storyboard-grid-layer";
         
         this.canvas = document.createElement("div");
         this.canvas.className = "storyboard-canvas";
@@ -167,8 +681,71 @@ class StoryboardWorkspace {
         this.inspector = document.createElement("div");
         this.inspector.className = "storyboard-inspector";
         this.inspector.innerHTML = `
-            <h3>Inspector</h3>
+            <div class="storyboard-inspector-header">
+                <h3>Inspector</h3>
+                <button id="storyboard-inspector-close" type="button">✕</button>
+            </div>
             <div id="inspector-content">Select an item to see details</div>
+        `;
+
+        this.settingsPanel = document.createElement("div");
+        this.settingsPanel.className = "storyboard-settings-panel";
+        this.settingsPanel.innerHTML = `
+            <div class="storyboard-settings-header">
+                <h3>Settings</h3>
+                <button id="storyboard-settings-close" type="button">✕</button>
+            </div>
+            <div class="storyboard-settings-section">
+                <h4>Canvas</h4>
+                <label class="storyboard-setting-row">
+                    <span>Show Grid</span>
+                    <input id="storyboard-setting-grid" type="checkbox">
+                </label>
+                <label class="storyboard-setting-row">
+                    <span>Snap To Grid</span>
+                    <input id="storyboard-setting-snap" type="checkbox">
+                </label>
+                <label class="storyboard-setting-row">
+                    <span>Grid Spacing</span>
+                    <input id="storyboard-setting-grid-spacing" type="number" min="8" max="256" step="1">
+                </label>
+            </div>
+            <div class="storyboard-settings-section">
+                <h4>Panels</h4>
+                <label class="storyboard-setting-row">
+                    <span>Show Prompt Bar</span>
+                    <input id="storyboard-setting-show-prompt" type="checkbox">
+                </label>
+                <label class="storyboard-setting-row">
+                    <span>Show Minimap</span>
+                    <input id="storyboard-setting-show-minimap" type="checkbox">
+                </label>
+                <label class="storyboard-setting-row">
+                    <span>Show Inspector</span>
+                    <input id="storyboard-setting-show-inspector" type="checkbox">
+                </label>
+            </div>
+        `;
+
+        this.extensionPicker = document.createElement("div");
+        this.extensionPicker.className = "storyboard-extension-picker";
+        this.extensionPicker.innerHTML = `
+            <div class="storyboard-picker-header">
+                <div class="storyboard-picker-heading">
+                    <h3>Node / Widget Picker</h3>
+                    <p>Click an item to add it. Double-click empty canvas to open.</p>
+                </div>
+                <button id="storyboard-picker-close" type="button">✕</button>
+            </div>
+            <label class="storyboard-picker-search">
+                <span class="toolbar-glyph">${TOOLBAR_ICONS.picker}</span>
+                <input id="storyboard-picker-search" type="search" placeholder="Search nodes and widgets to add">
+            </label>
+            <div class="storyboard-picker-meta-row">
+                <span id="storyboard-picker-meta">0 results</span>
+                <span id="storyboard-picker-status">Click any node or widget to add it. Right-click to pin it to the top bar.</span>
+            </div>
+            <div id="storyboard-picker-list" class="storyboard-picker-list"></div>
         `;
 
         this.inspectorToggle = document.createElement("button");
@@ -177,11 +754,13 @@ class StoryboardWorkspace {
         this.inspectorToggle.innerText = "☰";
         this.inspectorToggle.onclick = () => this.setInspectorOpen(!this.inspectorOpen);
 
+        this.canvasContainer.appendChild(this.gridLayer);
         this.canvasContainer.appendChild(this.canvas);
         this.canvasContainer.appendChild(this.minimap);
         this.canvasContainer.appendChild(this.minimapControls);
         main.appendChild(this.canvasContainer);
         main.appendChild(this.inspector);
+        main.appendChild(this.settingsPanel);
         main.appendChild(this.inspectorToggle);
         
         const footer = document.createElement("div");
@@ -195,6 +774,7 @@ class StoryboardWorkspace {
         this.window.appendChild(header);
         this.canvasContainer.appendChild(footer);
         this.window.appendChild(main);
+        this.window.appendChild(this.extensionPicker);
         
         this.contextMenu = document.createElement("div");
         this.contextMenu.className = "storyboard-context-menu";
@@ -211,10 +791,24 @@ class StoryboardWorkspace {
         document.body.appendChild(this.slotFileInput);
 
         document.getElementById("storyboard-close").onclick = () => this.hide();
+        this.coreToolbarRail = document.getElementById("storyboard-core-tools");
+        this.favoriteToolbarRail = document.getElementById("storyboard-favorite-tools");
+        this.openPickerButton = document.getElementById("storyboard-open-picker");
         this.themeToggleButton = document.getElementById("storyboard-theme-toggle");
+        this.themeToggleGlyph = document.getElementById("storyboard-theme-toggle-glyph");
+        this.themeToggleLabel = document.getElementById("storyboard-theme-toggle-label");
+        this.extensionPickerSearchInput = document.getElementById("storyboard-picker-search");
+        this.extensionPickerList = document.getElementById("storyboard-picker-list");
+        this.extensionPickerMeta = document.getElementById("storyboard-picker-meta");
+        this.extensionPickerStatusEl = document.getElementById("storyboard-picker-status");
         if (this.themeToggleButton) {
             this.themeToggleButton.onclick = () => this.cycleThemeMode();
         }
+        if (this.openPickerButton) {
+            this.openPickerButton.onclick = () => this.toggleExtensionPicker({ anchorEl: this.openPickerButton });
+        }
+        this.renderToolbarExtensions();
+        this.renderExtensionPicker();
         this.applyThemeMode();
         if (this.systemThemeQuery?.addEventListener) {
             this.systemThemeQuery.addEventListener("change", () => {
@@ -261,50 +855,36 @@ class StoryboardWorkspace {
             }
         };
 
-        document.getElementById("storyboard-add-slot").onclick = () => {
-            this.boardData.items.push({
-                id: `slot_${Date.now()}`,
-                type: "slot",
-                x: -this.offset.x / this.scale + 100,
-                y: -this.offset.y / this.scale + 100,
-                w: 512,
-                h: 512,
-                label: "New Slot",
-                tags: []
-            });
-            this.renderBoard();
-            this.saveBoard();
-        };
-
-        document.getElementById("storyboard-add-note").onclick = () => {
-            this.boardData.items.push({
-                id: `note_${Date.now()}`,
-                type: "note",
-                x: -this.offset.x / this.scale + 150,
-                y: -this.offset.y / this.scale + 150,
-                w: 200,
-                h: 150,
-                content: "New Note",
-                color: "#ffeb3b"
-            });
-            this.renderBoard();
-            this.saveBoard();
-        };
-
-        document.getElementById("storyboard-add-frame").onclick = () => {
-            this.boardData.items.push({
-                id: `frame_${Date.now()}`,
-                type: "frame",
-                x: -this.offset.x / this.scale + 200,
-                y: -this.offset.y / this.scale + 200,
-                w: 600,
-                h: 400,
-                label: "New Frame",
-                color: "#4CAF50"
-            });
-            this.renderBoard();
-            this.saveBoard();
-        };
+        const settingsToggleButton = document.getElementById("storyboard-settings-toggle");
+        if (settingsToggleButton) {
+            settingsToggleButton.onclick = () => this.setSettingsOpen(!this.settingsOpen);
+        }
+        const settingsCloseButton = document.getElementById("storyboard-settings-close");
+        if (settingsCloseButton) {
+            settingsCloseButton.onclick = () => this.setSettingsOpen(false);
+        }
+        const inspectorCloseButton = document.getElementById("storyboard-inspector-close");
+        if (inspectorCloseButton) {
+            inspectorCloseButton.onclick = () => this.setInspectorOpen(false);
+        }
+        const pickerCloseButton = document.getElementById("storyboard-picker-close");
+        if (pickerCloseButton) {
+            pickerCloseButton.onclick = () => this.closeExtensionPicker();
+        }
+        if (this.extensionPickerSearchInput) {
+            this.extensionPickerSearchInput.oninput = () => this.renderExtensionPicker();
+            this.extensionPickerSearchInput.onkeydown = (event) => {
+                if (event.key === "Enter") {
+                    event.preventDefault();
+                    const firstResult = this.extensionPickerList?.querySelector(".storyboard-picker-item");
+                    if (firstResult) firstResult.click();
+                } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    this.closeExtensionPicker();
+                }
+            };
+        }
+        this.bindSettingsPanel();
 
         const promptEl = document.getElementById("storyboard-prompt");
         promptEl.oninput = () => {
@@ -403,11 +983,190 @@ class StoryboardWorkspace {
         await this.saveBoard();
     }
 
+    ensureBoardSettings() {
+        if (!this.boardData) {
+            this.boardData = {
+                board_id: this.boardId,
+                items: [],
+                selection: [],
+                settings: normalizeStoryboardSettings(),
+            };
+        }
+        this.boardData.settings = normalizeStoryboardSettings(this.boardData.settings);
+        return this.boardData.settings;
+    }
+
+    getBoardSettings() {
+        return this.ensureBoardSettings();
+    }
+
+    bindSettingsPanel() {
+        const bindCheckbox = (id, key, onChange = null) => {
+            const input = document.getElementById(id);
+            if (!input) return;
+            input.onchange = () => {
+                const settings = this.getBoardSettings();
+                settings[key] = Boolean(input.checked);
+                this.boardData.settings = normalizeStoryboardSettings(settings);
+                if (typeof onChange === "function") onChange(this.boardData.settings);
+                this.renderSettingsPanel();
+                this.renderBoard();
+                this.saveBoard();
+            };
+        };
+
+        bindCheckbox("storyboard-setting-grid", "grid", () => this.updateGridOverlay());
+        bindCheckbox("storyboard-setting-snap", "snap");
+        bindCheckbox("storyboard-setting-show-prompt", "show_prompt", () => this.updateChromeVisibility());
+        bindCheckbox("storyboard-setting-show-minimap", "show_minimap", () => this.updateChromeVisibility());
+        bindCheckbox("storyboard-setting-show-inspector", "show_inspector", () => {
+            if (!this.getBoardSettings().show_inspector) this.inspectorOpen = false;
+            this.updateChromeVisibility();
+        });
+
+        const spacingInput = document.getElementById("storyboard-setting-grid-spacing");
+        if (spacingInput) {
+            spacingInput.onchange = () => {
+                const settings = this.getBoardSettings();
+                settings.grid_spacing = spacingInput.value;
+                this.boardData.settings = normalizeStoryboardSettings(settings);
+                this.renderSettingsPanel();
+                this.updateGridOverlay();
+                this.saveBoard();
+            };
+        }
+    }
+
+    renderSettingsPanel() {
+        const settings = this.getBoardSettings();
+        const map = [
+            ["storyboard-setting-grid", settings.grid],
+            ["storyboard-setting-snap", settings.snap],
+            ["storyboard-setting-show-prompt", settings.show_prompt],
+            ["storyboard-setting-show-minimap", settings.show_minimap],
+            ["storyboard-setting-show-inspector", settings.show_inspector],
+        ];
+        map.forEach(([id, value]) => {
+            const input = document.getElementById(id);
+            if (input) input.checked = Boolean(value);
+        });
+        const spacingInput = document.getElementById("storyboard-setting-grid-spacing");
+        if (spacingInput) spacingInput.value = String(settings.grid_spacing);
+        if (this.settingsPanel) {
+            this.settingsPanel.classList.toggle("open", this.settingsOpen);
+        }
+    }
+
+    setSettingsOpen(open) {
+        this.settingsOpen = open;
+        if (open) {
+            this.inspectorOpen = false;
+            this.closeExtensionPicker();
+        }
+        this.updateInspectorToggleState();
+        this.updateChromeVisibility();
+    }
+
+    updateInspectorToggleState() {
+        if (!this.inspectorToggle) return;
+        this.inspectorToggle.innerText = this.inspectorOpen ? "✕" : "☰";
+        this.inspectorToggle.title = this.inspectorOpen ? "Close Inspector" : "Open Inspector";
+        this.inspectorToggle.setAttribute("aria-label", this.inspectorToggle.title);
+    }
+
+    updateChromeVisibility() {
+        const settings = this.getBoardSettings();
+        if (this.minimap) this.minimap.style.display = settings.show_minimap ? "block" : "none";
+        if (this.minimapControls) this.minimapControls.style.display = settings.show_minimap ? "grid" : "none";
+        const prompt = this.canvasContainer.querySelector(".storyboard-floating-prompt");
+        if (prompt) prompt.style.display = settings.show_prompt ? "flex" : "none";
+        const canShowInspector = Boolean(settings.show_inspector);
+        if (this.inspector) {
+            this.inspector.classList.toggle("storyboard-inspector-hidden", !canShowInspector);
+            this.inspector.classList.toggle("open", canShowInspector && this.inspectorOpen);
+        }
+        if (this.inspectorToggle) this.inspectorToggle.style.display = settings.show_inspector ? "block" : "none";
+        if (this.settingsPanel) {
+            this.settingsPanel.classList.toggle("open", this.settingsOpen);
+        }
+        if (this.window) {
+            this.window.dataset.settingsOpen = this.settingsOpen ? "true" : "false";
+            this.window.dataset.inspectorOpen = canShowInspector && this.inspectorOpen ? "true" : "false";
+        }
+    }
+
+    updateGridOverlay() {
+        if (!this.gridLayer) return;
+        const styles = getGridOverlayStyles(this.scale, this.offset, this.getBoardSettings());
+        this.gridLayer.style.display = styles.visible ? "block" : "none";
+        this.gridLayer.style.backgroundSize = styles.backgroundSize;
+        this.gridLayer.style.backgroundPosition = styles.backgroundPosition;
+    }
+
+    addExtensionItems(items, selectionIds = null) {
+        const nextItems = (items || []).filter(Boolean);
+        if (!nextItems.length) return [];
+
+        const settings = this.getBoardSettings();
+        const preparedItems = nextItems.map((item) => {
+            const prepared = { ...item };
+            if (settings.snap && Number.isFinite(prepared.x) && Number.isFinite(prepared.y)) {
+                const snapped = snapPointToGrid({ x: prepared.x, y: prepared.y }, settings);
+                prepared.x = snapped.x;
+                prepared.y = snapped.y;
+            }
+            return prepared;
+        });
+
+        this.boardData.items.push(...preparedItems);
+        this.boardData.selection = Array.isArray(selectionIds) && selectionIds.length
+            ? selectionIds
+            : preparedItems.map(item => item.id);
+        this.renderBoard();
+        return preparedItems;
+    }
+
+    async runToolbarExtension(type) {
+        const extension = this.extensionRegistry.get(type);
+        if (!extension) return;
+        this.closeExtensionPicker();
+
+        if (typeof extension.onTrigger === "function") {
+            const result = await extension.onTrigger(this);
+            if (result === false || result == null) return;
+            if (result && result.handled) {
+                this.renderBoard();
+                await this.saveBoard();
+                return;
+            }
+            if (Array.isArray(result)) {
+                this.addExtensionItems(result);
+            } else if (Array.isArray(result.items)) {
+                this.addExtensionItems(result.items, result.selection);
+            } else if (result.item) {
+                this.addExtensionItems([result.item], result.selection);
+            } else {
+                this.renderBoard();
+            }
+            await this.saveBoard();
+            return;
+        }
+
+        if (!extension.createItem) return;
+        const item = extension.createItem(this);
+        if (!item) return;
+        this.addExtensionItems([item], [item.id]);
+        await this.saveBoard();
+    }
+
     setInspectorOpen(open) {
         this.inspectorOpen = open;
-        this.inspector.classList.toggle("closed", !open);
-        this.inspectorToggle.innerText = open ? "✕" : "☰";
-        this.inspectorToggle.title = open ? "Close Inspector" : "Open Inspector";
+        if (open) {
+            this.settingsOpen = false;
+            this.closeExtensionPicker();
+        }
+        this.updateInspectorToggleState();
+        this.updateChromeVisibility();
     }
 
     async show(boardId, node) {
@@ -459,6 +1218,8 @@ class StoryboardWorkspace {
 
     hide() {
         this.overlay.style.display = "none";
+        this.closeExtensionPicker();
+        if (this.contextMenu) this.contextMenu.style.display = "none";
         this.node = null;
     }
 
@@ -470,9 +1231,13 @@ class StoryboardWorkspace {
         this.needsReload = false;
         const response = await fetch(`/mkr/storyboard/${this.boardId}?t=${Date.now()}`);
         this.boardData = await response.json();
+        this.ensureBoardSettings();
         console.log("Storyboard loaded:", this.boardData);
         if (!this.boardData.selection) this.boardData.selection = [];
         this.renderBoard();
+        this.renderSettingsPanel();
+        this.updateChromeVisibility();
+        this.updateGridOverlay();
 
         // Sync prompt if node exists
         if (this.node) {
@@ -485,6 +1250,7 @@ class StoryboardWorkspace {
     }
 
     async saveBoard(notify = false) {
+        this.ensureBoardSettings();
         await fetch(`/mkr/storyboard/${this.boardId}/items`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -542,16 +1308,31 @@ class StoryboardWorkspace {
         return valid.has(mode) ? mode : "system";
     }
 
+    getThemeToolbarState() {
+        const iconKey = this.themeMode === "light"
+            ? "themeLight"
+            : this.themeMode === "dark"
+                ? "themeDark"
+                : "themeSystem";
+        const label = this.themeMode.charAt(0).toUpperCase() + this.themeMode.slice(1);
+        return {
+            iconMarkup: TOOLBAR_ICONS[iconKey],
+            label,
+            title: `Theme: ${label}`,
+        };
+    }
+
     applyThemeMode() {
         if (!this.window) return;
         const resolved = this.getResolvedTheme();
         this.window.dataset.theme = resolved;
         this.window.dataset.themeMode = this.themeMode;
         if (this.themeToggleButton) {
-            const glyph = this.themeMode === "system" ? "◐" : (this.themeMode === "light" ? "☼" : "☾");
-            this.themeToggleButton.textContent = glyph;
-            const label = this.themeMode ? `${this.themeMode.charAt(0).toUpperCase()}${this.themeMode.slice(1)}` : "System";
-            this.themeToggleButton.title = `Theme: ${label}`;
+            const themeState = this.getThemeToolbarState();
+            this.themeToggleButton.title = themeState.title;
+            this.themeToggleButton.setAttribute("aria-label", themeState.title);
+            if (this.themeToggleGlyph) this.themeToggleGlyph.innerHTML = themeState.iconMarkup;
+            if (this.themeToggleLabel) this.themeToggleLabel.textContent = themeState.label;
         }
     }
 
@@ -772,6 +1553,7 @@ class StoryboardWorkspace {
     }
 
     renderBoard() {
+        this.ensureBoardSettings();
         // Track which items are current to remove old ones later
         const currentItemIds = new Set(this.boardData.items.map(i => i.id));
         
@@ -807,6 +1589,9 @@ class StoryboardWorkspace {
             el.style.top = `${item.y}px`;
             el.style.width = `${item.w}px`;
             el.style.height = `${item.h}px`;
+            el.style.transformOrigin = "center center";
+            const rotation = this.getItemRotation(item);
+            el.style.transform = rotation ? `rotate(${rotation}deg)` : "";
             
             // Ensure frames are behind other items, but keep order within groups
             const baseZ = item.type === "frame" ? 100 : 1000;
@@ -818,6 +1603,8 @@ class StoryboardWorkspace {
 
         this.renderInspector();
         this.updateMinimap();
+        this.updateGridOverlay();
+        this.updateChromeVisibility();
     }
 
     updateMinimap() {
@@ -942,20 +1729,28 @@ class StoryboardWorkspace {
             const onMouseMove = (moveEvent) => {
                 const dw = (moveEvent.clientX - startX) / this.scale;
                 const dh = (moveEvent.clientY - startY) / this.scale;
+                const settings = this.getBoardSettings();
                 
                 // Force uniform scaling for images and slots
                 if (item.type === "image" || item.type === "video" || item.type === "slot" || moveEvent.shiftKey) {
                     const ratio = startW / startH;
                     if (Math.abs(dw) > Math.abs(dh)) {
-                        item.w = Math.max(50, startW + dw);
+                        let nextW = Math.max(50, startW + dw);
+                        if (settings.snap) nextW = Math.max(50, snapValueToGrid(nextW, settings));
+                        item.w = nextW;
                         item.h = item.w / ratio;
                     } else {
-                        item.h = Math.max(50, startH + dh);
+                        let nextH = Math.max(50, startH + dh);
+                        if (settings.snap) nextH = Math.max(50, snapValueToGrid(nextH, settings));
+                        item.h = nextH;
                         item.w = item.h * ratio;
                     }
                 } else {
-                    item.w = Math.max(50, startW + dw);
-                    item.h = Math.max(50, startH + dh);
+                    const snapped = settings.snap
+                        ? snapSizeToGrid({ w: Math.max(50, startW + dw), h: Math.max(50, startH + dh) }, settings)
+                        : { w: Math.max(50, startW + dw), h: Math.max(50, startH + dh) };
+                    item.w = snapped.w;
+                    item.h = snapped.h;
                 }
                 
                 el.style.width = `${item.w}px`;
@@ -1044,10 +1839,20 @@ class StoryboardWorkspace {
                 const domEl = this.itemElements.get(id);
                 return { item: it, domEl, startX: it.x, startY: it.y };
             }).filter(entry => entry.domEl && entry.item);
+            const anchorEntry = selectedElements.find(entry => entry.item.id === itemId) || selectedElements[0];
 
             const onMouseMove = (moveEvent) => {
-                const dx = (moveEvent.clientX - startX) / this.scale;
-                const dy = (moveEvent.clientY - startY) / this.scale;
+                let dx = (moveEvent.clientX - startX) / this.scale;
+                let dy = (moveEvent.clientY - startY) / this.scale;
+                const settings = this.getBoardSettings();
+                if (settings.snap && anchorEntry) {
+                    const snapped = snapPointToGrid({
+                        x: anchorEntry.startX + dx,
+                        y: anchorEntry.startY + dy,
+                    }, settings);
+                    dx = snapped.x - anchorEntry.startX;
+                    dy = snapped.y - anchorEntry.startY;
+                }
 
                 selectedElements.forEach(entry => {
                     entry.item.x = entry.startX + dx;
@@ -1265,7 +2070,24 @@ class StoryboardWorkspace {
     }
 
     updateItemContent(el, item, isNew) {
-        el.classList.remove("image-item", "video-item", "slot-item", "palette-widget-item", "note-item", "frame-item");
+        const extensionDefinition = this.extensionRegistry.get(item.type);
+        el.classList.remove(
+            "image-item",
+            "video-item",
+            "slot-item",
+            "palette-widget-item",
+            "note-item",
+            "frame-item",
+            ...this.extensionRegistry.getCanvasClasses(),
+        );
+        delete el.dataset.mediaPresentation;
+        delete el.dataset.framePresentation;
+        if (item.type !== "slot") {
+            el.querySelector(".slot-add-glyph")?.remove();
+            el.querySelector(".slot-label")?.remove();
+            el.querySelector(".slot-hint")?.remove();
+            el.removeAttribute("title");
+        }
         // Reference Pill
         let pill = el.querySelector(".storyboard-ref-pill");
         if (item.ref_id) {
@@ -1298,6 +2120,8 @@ class StoryboardWorkspace {
 
         if (item.type === "image") {
             el.classList.add("image-item");
+            const mediaPresentation = this.getMediaPresentation(item);
+            el.dataset.mediaPresentation = mediaPresentation;
             let wrapper = el.querySelector(".image-wrapper");
             if (!wrapper) {
                 wrapper = document.createElement("div");
@@ -1341,29 +2165,12 @@ class StoryboardWorkspace {
                 img.style.objectFit = "cover";
             }
 
-            let meta = el.querySelector(".image-meta");
-            if (!meta) {
-                meta = document.createElement("div");
-                meta.className = "image-meta";
-                el.appendChild(meta);
-            }
-            meta.innerHTML = "";
-            if (item.label) {
-                const labelChip = document.createElement("div");
-                labelChip.className = "image-chip image-chip-label";
-                labelChip.innerText = item.label;
-                meta.appendChild(labelChip);
-            }
-            (item.tags || []).forEach(tag => {
-                const tagChip = document.createElement("div");
-                tagChip.className = "image-chip image-chip-tag";
-                tagChip.innerText = `#${tag}`;
-                meta.appendChild(tagChip);
-            });
-            meta.style.display = meta.children.length > 0 ? "flex" : "none";
+            this.renderMediaMeta(el, item, "image-meta", mediaPresentation);
             this.updateImagePalette(el, item);
         } else if (item.type === "video") {
             el.classList.add("video-item");
+            const mediaPresentation = this.getMediaPresentation(item);
+            el.dataset.mediaPresentation = mediaPresentation;
             let wrapper = el.querySelector(".video-wrapper");
             if (!wrapper) {
                 wrapper = document.createElement("div");
@@ -1390,102 +2197,42 @@ class StoryboardWorkspace {
                 video.pause();
             }
 
-            let meta = el.querySelector(".video-meta");
-            if (!meta) {
-                meta = document.createElement("div");
-                meta.className = "video-meta";
-                el.appendChild(meta);
-            }
-            meta.innerHTML = "";
-            if (item.label) {
-                const labelChip = document.createElement("div");
-                labelChip.className = "image-chip image-chip-label";
-                labelChip.innerText = item.label;
-                meta.appendChild(labelChip);
-            }
-            (item.tags || []).forEach(tag => {
-                const tagChip = document.createElement("div");
-                tagChip.className = "image-chip image-chip-tag";
-                tagChip.innerText = `#${tag}`;
-                meta.appendChild(tagChip);
-            });
-            meta.style.display = meta.children.length > 0 ? "flex" : "none";
+            this.renderMediaMeta(el, item, "video-meta", mediaPresentation);
             
         } else if (item.type === "slot") {
             el.classList.add("slot-item");
+            let addGlyph = el.querySelector(".slot-add-glyph");
+            if (!addGlyph) {
+                addGlyph = document.createElement("button");
+                addGlyph.type = "button";
+                addGlyph.className = "slot-add-glyph";
+                addGlyph.textContent = "+";
+                el.appendChild(addGlyph);
+            }
             let label = el.querySelector(".slot-label");
             if (!label) {
                 label = document.createElement("div");
                 label.className = "slot-label";
                 el.appendChild(label);
             }
-            label.innerText = item.label || "Empty Slot";
-            label.title = "Click to import image or video";
-            label.onclick = (e) => {
+            let hint = el.querySelector(".slot-hint");
+            if (!hint) {
+                hint = document.createElement("div");
+                hint.className = "slot-hint";
+                el.appendChild(hint);
+            }
+            hint.innerText = "Click to add media";
+            const visibleLabel = item.label && !["New Slot", "Empty Slot"].includes(item.label) ? item.label : "";
+            label.innerText = visibleLabel;
+            label.style.display = visibleLabel ? "block" : "none";
+            el.title = "Empty slot";
+            addGlyph.title = "Click to import image or video";
+            addGlyph.setAttribute("aria-label", `Add media to ${item.label || "empty slot"}`);
+            addGlyph.onmousedown = (e) => e.stopPropagation();
+            addGlyph.onclick = (e) => {
                 e.stopPropagation();
                 this.promptImportForSlot(item.id);
             };
-            
-        } else if (item.type === "palette") {
-            el.classList.add("palette-widget-item");
-            let container = el.querySelector(".palette-widget");
-            if (!container) {
-                container = document.createElement("div");
-                container.className = "palette-widget";
-                el.appendChild(container);
-            }
-            let linkBadge = el.querySelector(".palette-link-badge");
-            if (item.palette_source_id) {
-                if (!linkBadge) {
-                    linkBadge = document.createElement("div");
-                    linkBadge.className = "palette-link-badge";
-                    el.appendChild(linkBadge);
-                }
-                linkBadge.innerText = "🔗";
-                linkBadge.title = `Linked to ${item.palette_source_id}`;
-            } else if (linkBadge) {
-                linkBadge.remove();
-            }
-            const sourceItem = this.boardData.items.find(i => i.id === item.palette_source_id);
-            const palettePosition = sourceItem?.palette_position || "left";
-            container.classList.toggle("left-position", palettePosition === "left");
-            container.classList.toggle("bottom-position", palettePosition !== "left");
-            const colors = item.palette_data || [];
-
-            if (sourceItem) {
-                if (palettePosition === "left") {
-                    item.w = 170;
-                    item.h = Math.max(170, colors.length * 66);
-                } else {
-                    item.w = Math.max(170, colors.length * 66);
-                    item.h = 170;
-                }
-                const position = this.getPaletteWidgetPosition(sourceItem, item.w, item.h);
-                item.x = position.x;
-                item.y = position.y;
-                el.style.left = `${item.x}px`;
-                el.style.top = `${item.y}px`;
-                el.style.width = `${item.w}px`;
-                el.style.height = `${item.h}px`;
-            }
-
-            container.innerHTML = "";
-            colors.forEach(hex => {
-                const pill = document.createElement("div");
-                pill.className = "palette-color";
-                pill.style.backgroundColor = hex;
-                pill.style.color = this.getContrastColor(hex);
-                pill.innerText = hex.toUpperCase();
-                pill.title = `Click to copy: ${hex}`;
-                pill.onmousedown = (e) => e.stopPropagation();
-                pill.onclick = async (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    const success = await this.copyToClipboard(hex.toUpperCase());
-                    if (success) this.showCopyFeedback(pill);
-                };
-                container.appendChild(pill);
-            });
             
         } else if (item.type === "palette") {
             el.classList.add("palette-widget-item");
@@ -1612,20 +2359,65 @@ class StoryboardWorkspace {
             
         } else if (item.type === "frame") {
             el.classList.add("frame-item");
-            const frameColor = item.color || "#4CAF50";
+            const framePresentation = this.getFramePresentation(item);
+            el.dataset.framePresentation = framePresentation;
+            const frameColor = item.color || DEFAULT_FRAME_COLOR;
             el.style.borderColor = frameColor;
-            let label = el.querySelector(".frame-label");
-            if (!label) {
-                label = document.createElement("div");
-                label.className = "frame-label";
-                el.appendChild(label);
+            let header = el.querySelector(".frame-header");
+            if (!header) {
+                header = document.createElement("div");
+                header.className = "frame-header";
+                header.innerHTML = `
+                    <div class="frame-header-row">
+                        <div class="frame-scene-badge"></div>
+                        <div class="frame-label"></div>
+                    </div>
+                    <div class="frame-subtitle"></div>
+                `;
+                el.appendChild(header);
             }
-            label.innerText = item.label || "";
+            const sceneBadge = header.querySelector(".frame-scene-badge");
+            const label = header.querySelector(".frame-label");
+            const subtitle = header.querySelector(".frame-subtitle");
+            const sceneCode = (item.scene_code || "").trim();
+            const titleText = (item.label || "").trim();
+            const subtitleText = (item.scene_subtitle || "").trim();
+
+            sceneBadge.innerText = sceneCode;
+            sceneBadge.style.display = sceneCode ? "inline-flex" : "none";
+            sceneBadge.style.backgroundColor = frameColor;
+            sceneBadge.style.color = this.getContrastColor(frameColor);
+
+            label.innerText = titleText || "Frame";
             label.style.backgroundColor = frameColor;
             label.style.color = this.getContrastColor(frameColor);
+            label.style.display = titleText || sceneCode ? "inline-flex" : "none";
+
+            subtitle.innerText = subtitleText;
+            subtitle.style.display = subtitleText ? "block" : "none";
+            header.style.display = (sceneCode || titleText || subtitleText) ? "flex" : "none";
 
             // Update palette bar
             this.updateFramePalette(el, item);
+        } else if (typeof extensionDefinition?.updateItemContent === "function") {
+            extensionDefinition.updateItemContent({ workspace: this, element: el, item, isNew });
+        } else {
+            el.classList.add("slot-item");
+            let label = el.querySelector(".slot-label");
+            if (!label) {
+                label = document.createElement("div");
+                label.className = "slot-label";
+                el.appendChild(label);
+            }
+            let hint = el.querySelector(".slot-hint");
+            if (!hint) {
+                hint = document.createElement("div");
+                hint.className = "slot-hint";
+                el.appendChild(hint);
+            }
+            label.innerText = extensionDefinition?.title || item.type || "Custom Item";
+            label.style.display = "block";
+            hint.innerText = "Custom storyboard extension";
         }
     }
 
@@ -1818,6 +2610,187 @@ class StoryboardWorkspace {
         };
     }
 
+    isMoodboardContentItem(item) {
+        return isStoryboardContentItem(item);
+    }
+
+    isTiltableItem(item) {
+        return isStoryboardTiltableItem(item);
+    }
+
+    normalizeRotation(value) {
+        return normalizeStoryboardRotation(value);
+    }
+
+    getItemRotation(item) {
+        return getStoryboardItemRotation(item);
+    }
+
+    setItemRotation(item, value) {
+        return setStoryboardItemRotation(item, value);
+    }
+
+    straightenItems(items) {
+        (items || []).forEach(item => this.setItemRotation(item, 0));
+    }
+
+    getMediaPresentation(item) {
+        return getStoryboardMediaPresentation(item);
+    }
+
+    setMediaPresentation(item, value) {
+        return setStoryboardMediaPresentation(item, value);
+    }
+
+    applyMediaPresentation(items, value) {
+        (items || []).forEach(item => {
+            if (isMediaPresentationItem(item)) this.setMediaPresentation(item, value);
+        });
+    }
+
+    getFramePresentation(item) {
+        return getStoryboardFramePresentation(item);
+    }
+
+    setFramePresentation(item, value) {
+        return setStoryboardFramePresentation(item, value);
+    }
+
+    applyFramePresentation(items, value) {
+        (items || []).forEach(item => {
+            if (isFramePresentationItem(item)) this.setFramePresentation(item, value);
+        });
+    }
+
+    getNextFrameSceneCode() {
+        const numericCodes = this.boardData.items
+            .filter(item => item?.type === "frame")
+            .map(item => parseInt(String(item.scene_code || "").trim(), 10))
+            .filter(code => Number.isFinite(code));
+        const nextCode = numericCodes.length ? Math.max(...numericCodes) + 1 : 1;
+        return formatStoryboardSceneCode(nextCode);
+    }
+
+    renumberFrames(items, startAt = 1) {
+        const frames = (items || []).filter(item => item?.type === "frame");
+        const orderedFrames = sortItemsByStoryboardOrder(frames);
+        orderedFrames.forEach((frame, index) => {
+            frame.scene_code = formatStoryboardSceneCode(startAt + index);
+        });
+        return orderedFrames.length;
+    }
+
+    getItemsBounds(items) {
+        return getStoryboardItemsBounds(items);
+    }
+
+    getItemsInFrame(frame) {
+        if (!frame || frame.type !== "frame") return [];
+        return this.boardData.items.filter(item => {
+            if (!this.isMoodboardContentItem(item)) return false;
+            const centerX = item.x + (item.w / 2);
+            const centerY = item.y + (item.h / 2);
+            return (
+                centerX >= frame.x &&
+                centerY >= frame.y &&
+                centerX <= (frame.x + frame.w) &&
+                centerY <= (frame.y + frame.h)
+            );
+        });
+    }
+
+    arrangeItemsAsMoodboard(items, options = {}) {
+        return arrangeMoodboardLayout(items, options);
+    }
+
+    arrangeItemsAsStoryStrip(items, options = {}) {
+        return arrangeStoryStripLayout(items, options);
+    }
+
+    arrangeItemsAsStack(items, options = {}) {
+        return arrangeStackLayout(items, options);
+    }
+
+    createFrameFromItems(items, label = "Moodboard Frame") {
+        const contentItems = (items || []).filter(item => this.isMoodboardContentItem(item));
+        if (!contentItems.length) return null;
+
+        const bounds = this.getItemsBounds(contentItems);
+        if (!bounds) return null;
+
+        const frame = {
+            id: this.generateUUID(),
+            type: "frame",
+            x: Math.round(bounds.x - 40),
+            y: Math.round(bounds.y - 40),
+            w: Math.round(bounds.w + 80),
+            h: Math.round(bounds.h + 80),
+            label,
+            color: DEFAULT_FRAME_COLOR,
+            frame_presentation: "board",
+            scene_code: this.getNextFrameSceneCode(),
+        };
+
+        this.boardData.items.push(frame);
+        this.boardData.selection = [frame.id];
+        return frame;
+    }
+
+    restackItems(items, comparator = null) {
+        const targetItems = (items || []).filter(Boolean);
+        if (!targetItems.length) return;
+
+        const targetIds = new Set(targetItems.map(item => item.id));
+        const orderedItems = [...targetItems];
+        if (typeof comparator === "function") orderedItems.sort(comparator);
+
+        this.boardData.items = [
+            ...this.boardData.items.filter(item => !targetIds.has(item.id)),
+            ...orderedItems,
+        ];
+    }
+
+    renderMediaMeta(el, item, metaClassName, presentation) {
+        let meta = el.querySelector(`.${metaClassName}`);
+        if (!meta) {
+            meta = document.createElement("div");
+            meta.className = metaClassName;
+            el.appendChild(meta);
+        }
+
+        meta.dataset.presentation = presentation;
+        meta.innerHTML = "";
+
+        const label = (item.label || "").trim();
+        const tags = (item.tags || []).filter(Boolean);
+        const showTags = presentation !== "polaroid";
+        const captionText = getMediaCaptionText(item, presentation);
+
+        if (captionText) {
+            const labelChip = document.createElement("div");
+            labelChip.className = "image-chip image-chip-label";
+            labelChip.innerText = captionText;
+            meta.appendChild(labelChip);
+        }
+
+        if (showTags) {
+            tags.forEach(tag => {
+                const tagChip = document.createElement("div");
+                tagChip.className = "image-chip image-chip-tag";
+                tagChip.innerText = `#${tag}`;
+                meta.appendChild(tagChip);
+            });
+        } else if (!label && tags.length > 1) {
+            const extraTagText = document.createElement("div");
+            extraTagText.className = "image-chip image-chip-tag";
+            extraTagText.innerText = `+${tags.length - 1} tags`;
+            meta.appendChild(extraTagText);
+        }
+
+        meta.style.display = meta.children.length > 0 ? "flex" : "none";
+        return meta;
+    }
+
     autoArrangeFrame(frame) {
         if (!frame || frame.type !== "frame") return;
 
@@ -1890,6 +2863,12 @@ class StoryboardWorkspace {
             content.innerHTML = `
                 <div class="inspector-summary">${this.boardData.selection.length} items selected</div>
                 <div class="inspector-actions">
+                    <button id="action-scatter-moodboard">Scatter as Moodboard</button>
+                    <button id="action-story-strip">Arrange as Story Strip</button>
+                    <button id="action-stack-selection">Stack as Pile</button>
+                    <button id="action-renumber-frames">Renumber Frames</button>
+                    <button id="action-straighten-selection">Straighten Selection</button>
+                    <button id="action-frame-selection">Frame Selection</button>
                     <button id="action-align-left">Align Left</button>
                     <button id="action-align-right">Align Right</button>
                     <button id="action-align-top">Align Top</button>
@@ -1899,6 +2878,94 @@ class StoryboardWorkspace {
                     <button id="action-delete-selected" class="danger">Delete Selected</button>
                 </div>
             `;
+
+            const selectedItems = this.boardData.selection
+                .map(id => this.boardData.items.find(i => i.id === id))
+                .filter(Boolean);
+            const moodboardItems = selectedItems.filter(item => this.isMoodboardContentItem(item));
+            const selectedFrames = selectedItems.filter(item => item.type === "frame");
+
+            const scatterButton = document.getElementById("action-scatter-moodboard");
+            if (scatterButton) {
+                const canScatter = moodboardItems.length > 1;
+                scatterButton.disabled = !canScatter;
+                scatterButton.title = canScatter ? "Create a looser moodboard composition from the selected items" : "Select at least two non-frame items";
+                scatterButton.onclick = () => {
+                    if (!canScatter) return;
+                    this.arrangeItemsAsMoodboard(moodboardItems);
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
+
+            const storyStripButton = document.getElementById("action-story-strip");
+            if (storyStripButton) {
+                const canStoryStrip = moodboardItems.length > 1;
+                storyStripButton.disabled = !canStoryStrip;
+                storyStripButton.title = canStoryStrip ? "Arrange the selected items into a clean storyboard strip" : "Select at least two non-frame items";
+                storyStripButton.onclick = () => {
+                    if (!canStoryStrip) return;
+                    this.arrangeItemsAsStoryStrip(moodboardItems);
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
+
+            const stackSelectionButton = document.getElementById("action-stack-selection");
+            if (stackSelectionButton) {
+                const canStackSelection = moodboardItems.length > 1;
+                stackSelectionButton.disabled = !canStackSelection;
+                stackSelectionButton.title = canStackSelection ? "Build an overlapping moodboard pile from the selected items" : "Select at least two non-frame items";
+                stackSelectionButton.onclick = () => {
+                    if (!canStackSelection) return;
+                    this.arrangeItemsAsStack(moodboardItems);
+                    this.restackItems(moodboardItems, (a, b) => (b.w * b.h) - (a.w * a.h));
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
+
+            const straightenSelectionButton = document.getElementById("action-straighten-selection");
+            if (straightenSelectionButton) {
+                const tiltableItems = moodboardItems.filter(item => this.isTiltableItem(item));
+                const canStraighten = tiltableItems.some(item => this.getItemRotation(item) !== 0);
+                straightenSelectionButton.disabled = !canStraighten;
+                straightenSelectionButton.title = canStraighten ? "Reset tilt on the selected items" : "No selected items are tilted";
+                straightenSelectionButton.onclick = () => {
+                    if (!canStraighten) return;
+                    this.straightenItems(tiltableItems);
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
+
+            const renumberFramesButton = document.getElementById("action-renumber-frames");
+            if (renumberFramesButton) {
+                const canRenumberFrames = selectedFrames.length > 0;
+                renumberFramesButton.disabled = !canRenumberFrames;
+                renumberFramesButton.title = canRenumberFrames ? "Assign scene numbers to selected frames in reading order" : "Select at least one frame";
+                renumberFramesButton.onclick = () => {
+                    if (!canRenumberFrames) return;
+                    this.renumberFrames(selectedFrames);
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
+
+            const frameSelectionButton = document.getElementById("action-frame-selection");
+            if (frameSelectionButton) {
+                const canFrameSelection = moodboardItems.length > 0;
+                frameSelectionButton.disabled = !canFrameSelection;
+                frameSelectionButton.title = canFrameSelection ? "Create a frame around the selected moodboard items" : "Select at least one non-frame item";
+                frameSelectionButton.onclick = () => {
+                    if (!canFrameSelection) return;
+                    const frame = this.createFrameFromItems(moodboardItems);
+                    this.renderBoard();
+                    this.saveBoard();
+                    const frameEl = frame ? this.itemElements.get(frame.id) : null;
+                    if (frameEl) this.updateFramePalette(frameEl, frame);
+                };
+            }
 
             document.getElementById("action-align-left").onclick = () => {
                 const minX = Math.min(...this.boardData.selection.map(id => this.boardData.items.find(i => i.id === id).x));
@@ -1987,7 +3054,7 @@ class StoryboardWorkspace {
         `;
 
         const presets = [
-            "#4CAF50", "#2196F3", "#f44336", "#ffeb3b",
+            DEFAULT_FRAME_COLOR, "#2196F3", "#f44336", "#ffeb3b",
             "#9c27b0", "#ff9800", "#795548", "#607d8b"
         ];
         const fontOptions = this.fontOptions || this.getDefaultFontOptions();
@@ -2025,6 +3092,52 @@ class StoryboardWorkspace {
             return html;
         };
 
+        const createRotationField = (currentRotation) => {
+            const rotation = this.normalizeRotation(currentRotation || 0);
+            return `
+                <div class="inspector-field">
+                    <label>Tilt</label>
+                    <input type="range" id="inspector-rotation" min="-25" max="25" step="1" value="${rotation}">
+                    <div class="inspector-range-row">
+                        <span id="inspector-rotation-value">${rotation}°</span>
+                        <button id="action-straighten-item" type="button">Straighten</button>
+                    </div>
+                </div>
+            `;
+        };
+
+        const createMediaPresentationField = (currentPresentation) => {
+            const presentation = MEDIA_PRESENTATION_OPTIONS.some(option => option.value === currentPresentation)
+                ? currentPresentation
+                : "clean";
+            const optionsHtml = MEDIA_PRESENTATION_OPTIONS.map(option => (
+                `<option value="${option.value}" ${option.value === presentation ? "selected" : ""}>${option.label}</option>`
+            )).join("");
+            return `
+                <div class="inspector-field">
+                    <label>Presentation</label>
+                    <select id="inspector-media-presentation">${optionsHtml}</select>
+                </div>
+            `;
+        };
+
+        const createFramePresentationField = (currentPresentation) => {
+            const presentation = FRAME_PRESENTATION_OPTIONS.some(option => option.value === currentPresentation)
+                ? currentPresentation
+                : "outline";
+            const optionsHtml = FRAME_PRESENTATION_OPTIONS.map(option => (
+                `<option value="${option.value}" ${option.value === presentation ? "selected" : ""}>${option.label}</option>`
+            )).join("");
+            return `
+                <div class="inspector-field">
+                    <label>Frame Style</label>
+                    <select id="inspector-frame-presentation">${optionsHtml}</select>
+                </div>
+            `;
+        };
+
+        const extensionDefinition = this.extensionRegistry.get(item.type);
+
         if (item.type === "image" || item.type === "video" || item.type === "slot" || item.type === "palette") {
             fields += `
                 <div class="inspector-field">
@@ -2035,6 +3148,8 @@ class StoryboardWorkspace {
                     <label>Tags (comma separated)</label>
                     <input type="text" id="inspector-tags" value="${(item.tags || []).join(", ")}">
                 </div>
+                ${item.type !== "palette" ? createRotationField(item.rotation || 0) : ""}
+                ${(item.type === "image" || item.type === "video") ? createMediaPresentationField(item.media_presentation) : ""}
             `;
             if (item.type === "image") {
                 const imagePaletteColors = item.palette_colors || 8;
@@ -2067,6 +3182,15 @@ class StoryboardWorkspace {
                     <input type="text" id="inspector-label" value="${item.label || ""}">
                 </div>
                 <div class="inspector-field">
+                    <label>Scene Code</label>
+                    <input type="text" id="inspector-frame-scene-code" value="${item.scene_code || ""}" placeholder="01">
+                </div>
+                <div class="inspector-field">
+                    <label>Subtitle</label>
+                    <input type="text" id="inspector-frame-subtitle" value="${item.scene_subtitle || ""}" placeholder="Wide establishing shot">
+                </div>
+                ${createFramePresentationField(item.frame_presentation)}
+                <div class="inspector-field">
                     <label>Frame Palette Colors</label>
                     <select id="inspector-frame-palette-colors">
                         <option value="4" ${framePaletteColors === 4 ? "selected" : ""}>4</option>
@@ -2082,7 +3206,7 @@ class StoryboardWorkspace {
                         <option value="left" ${framePalettePosition === "left" ? "selected" : ""}>Left Center</option>
                     </select>
                 </div>
-                ${createColorPicker(item.color || "#4CAF50")}
+                ${createColorPicker(item.color || DEFAULT_FRAME_COLOR)}
             `;
         } else if (item.type === "note") {
             const noteStyle = item.note_style || {};
@@ -2124,7 +3248,18 @@ class StoryboardWorkspace {
                         <option value="right" ${(noteStyle.text_align || "center") === "right" ? "selected" : ""}>Right</option>
                     </select>
                 </div>
+                ${createRotationField(item.rotation || 0)}
                 ${createColorPicker(item.color || "#ffeb3b")}
+            `;
+        } else if (typeof extensionDefinition?.renderInspectorFields === "function") {
+            fields += extensionDefinition.renderInspectorFields({ workspace: this, item }) || "";
+        } else {
+            fields += `
+                <div class="inspector-summary">Custom extension item</div>
+                <div class="inspector-field">
+                    <label>Type</label>
+                    <input type="text" value="${item.type || ""}" readonly>
+                </div>
             `;
         }
 
@@ -2137,6 +3272,9 @@ class StoryboardWorkspace {
                 ${item.type === "frame" ? `<button id="action-toggle-palette">${item.palette_hidden ? "Show Palette" : "Hide Palette"}</button>` : ""}
                 ${item.type === "image" ? `<button id="action-toggle-image-palette">${item.image_palette_visible ? "Hide Palette" : "Show Palette"}</button>` : ""}
                 ${item.type === "frame" ? '<button id="action-auto-layout">Auto Arrange In Frame</button>' : ""}
+                ${item.type === "frame" ? '<button id="action-moodboard-layout">Moodboard Layout In Frame</button>' : ""}
+                ${item.type === "frame" ? '<button id="action-story-strip-layout">Story Strip In Frame</button>' : ""}
+                ${item.type === "frame" ? '<button id="action-stack-layout">Stack Layout In Frame</button>' : ""}
                 <button id="action-delete" class="danger">Delete Item</button>
             </div>
         `;
@@ -2251,6 +3389,7 @@ class StoryboardWorkspace {
         if (autoLayoutButton) {
             autoLayoutButton.onclick = () => {
                 this.autoArrangeFrame(item);
+                this.straightenItems(this.getItemsInFrame(item));
                 this.renderBoard();
                 this.saveBoard();
                 const frameEl = this.itemElements.get(item.id);
@@ -2258,16 +3397,117 @@ class StoryboardWorkspace {
             };
         }
 
+        const moodboardLayoutButton = document.getElementById("action-moodboard-layout");
+        if (moodboardLayoutButton) {
+            const frameItems = this.getItemsInFrame(item);
+            const canScatterInFrame = frameItems.length > 1;
+            moodboardLayoutButton.disabled = !canScatterInFrame;
+            moodboardLayoutButton.title = canScatterInFrame ? "Arrange the items in this frame into a looser moodboard composition" : "Need at least two items inside the frame";
+            moodboardLayoutButton.onclick = () => {
+                if (!canScatterInFrame) return;
+                this.arrangeItemsAsMoodboard(frameItems, {
+                    bounds: { x: item.x, y: item.y, w: item.w, h: item.h },
+                    padding: 28,
+                    allowResize: true,
+                });
+                this.renderBoard();
+                this.saveBoard();
+                const frameEl = this.itemElements.get(item.id);
+                if (frameEl) this.updateFramePalette(frameEl, item);
+            };
+        }
+
+        const storyStripLayoutButton = document.getElementById("action-story-strip-layout");
+        if (storyStripLayoutButton) {
+            const frameItems = this.getItemsInFrame(item);
+            const canStripInFrame = frameItems.length > 1;
+            storyStripLayoutButton.disabled = !canStripInFrame;
+            storyStripLayoutButton.title = canStripInFrame ? "Arrange the items in this frame into a storyboard strip" : "Need at least two items inside the frame";
+            storyStripLayoutButton.onclick = () => {
+                if (!canStripInFrame) return;
+                this.arrangeItemsAsStoryStrip(frameItems, {
+                    bounds: { x: item.x, y: item.y, w: item.w, h: item.h },
+                    padding: 28,
+                    allowResize: true,
+                });
+                this.renderBoard();
+                this.saveBoard();
+                const frameEl = this.itemElements.get(item.id);
+                if (frameEl) this.updateFramePalette(frameEl, item);
+            };
+        }
+
+        const stackLayoutButton = document.getElementById("action-stack-layout");
+        if (stackLayoutButton) {
+            const frameItems = this.getItemsInFrame(item);
+            const canStackInFrame = frameItems.length > 1;
+            stackLayoutButton.disabled = !canStackInFrame;
+            stackLayoutButton.title = canStackInFrame ? "Build an overlapping moodboard pile inside this frame" : "Need at least two items inside the frame";
+            stackLayoutButton.onclick = () => {
+                if (!canStackInFrame) return;
+                this.arrangeItemsAsStack(frameItems, {
+                    bounds: { x: item.x, y: item.y, w: item.w, h: item.h },
+                    padding: 30,
+                    allowResize: true,
+                });
+                this.restackItems(frameItems, (a, b) => (b.w * b.h) - (a.w * a.h));
+                this.renderBoard();
+                this.saveBoard();
+                const frameEl = this.itemElements.get(item.id);
+                if (frameEl) this.updateFramePalette(frameEl, item);
+            };
+        }
+
+        const rotationInput = document.getElementById("inspector-rotation");
+        const rotationValue = document.getElementById("inspector-rotation-value");
+        const straightenItemButton = document.getElementById("action-straighten-item");
+        if (rotationInput && this.isTiltableItem(item)) {
+            const updateRotationPreview = (value) => {
+                this.setItemRotation(item, value);
+                if (rotationValue) rotationValue.innerText = `${this.getItemRotation(item)}°`;
+                const itemEl = this.itemElements.get(item.id);
+                if (itemEl) {
+                    const rotation = this.getItemRotation(item);
+                    itemEl.style.transform = rotation ? `rotate(${rotation}deg)` : "";
+                }
+            };
+            const applyRotation = (value) => {
+                updateRotationPreview(value);
+                this.saveBoard();
+            };
+            rotationInput.oninput = () => {
+                updateRotationPreview(rotationInput.value);
+            };
+            rotationInput.onchange = () => applyRotation(rotationInput.value);
+            if (straightenItemButton) {
+                straightenItemButton.onclick = () => {
+                    rotationInput.value = "0";
+                    applyRotation(0);
+                };
+            }
+        }
+
         if (item.type === "image" || item.type === "video" || item.type === "slot" || item.type === "palette") {
             document.getElementById("inspector-label").onchange = (e) => {
                 item.label = e.target.value;
+                this.renderBoard();
                 this.saveBoard();
             };
 
             document.getElementById("inspector-tags").onchange = (e) => {
                 item.tags = e.target.value.split(",").map(s => s.trim()).filter(s => s);
+                this.renderBoard();
                 this.saveBoard();
             };
+
+            const mediaPresentationSelect = document.getElementById("inspector-media-presentation");
+            if (mediaPresentationSelect && isMediaPresentationItem(item)) {
+                mediaPresentationSelect.onchange = () => {
+                    this.setMediaPresentation(item, mediaPresentationSelect.value);
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
 
             if (item.type === "image") {
                 const imagePaletteSelect = document.getElementById("inspector-image-palette-colors");
@@ -2306,6 +3546,34 @@ class StoryboardWorkspace {
                 this.renderBoard();
                 this.saveBoard();
             };
+            const frameSceneCodeInput = document.getElementById("inspector-frame-scene-code");
+            if (frameSceneCodeInput) {
+                frameSceneCodeInput.onchange = () => {
+                    const value = frameSceneCodeInput.value.trim();
+                    if (value) item.scene_code = value;
+                    else delete item.scene_code;
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
+            const frameSubtitleInput = document.getElementById("inspector-frame-subtitle");
+            if (frameSubtitleInput) {
+                frameSubtitleInput.onchange = () => {
+                    const value = frameSubtitleInput.value.trim();
+                    if (value) item.scene_subtitle = value;
+                    else delete item.scene_subtitle;
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
+            const framePresentationSelect = document.getElementById("inspector-frame-presentation");
+            if (framePresentationSelect) {
+                framePresentationSelect.onchange = () => {
+                    this.setFramePresentation(item, framePresentationSelect.value);
+                    this.renderBoard();
+                    this.saveBoard();
+                };
+            }
             const framePaletteSelect = document.getElementById("inspector-frame-palette-colors");
             if (framePaletteSelect) {
                 framePaletteSelect.onchange = () => {
@@ -2356,6 +3624,8 @@ class StoryboardWorkspace {
             bindTypography("inspector-note-font-size", "font_size", (v) => v ? parseInt(v, 10) : "");
             bindTypography("inspector-note-font-weight", "font_weight");
             bindTypography("inspector-note-text-align", "text_align");
+        } else if (typeof extensionDefinition?.bindInspector === "function") {
+            extensionDefinition.bindInspector({ workspace: this, item });
         }
 
         // Color handling for both frame and note
@@ -2408,7 +3678,7 @@ class StoryboardWorkspace {
 
         this.canvasContainer.onmousedown = (e) => {
             // Deselect if clicking the canvas directly
-            if (e.target === this.canvas || e.target === this.canvasContainer) {
+            if (this.isCanvasBackgroundTarget(e.target)) {
                 this.boardData.selection = [];
                 this.renderBoard();
                 this.saveBoard();
@@ -2419,6 +3689,13 @@ class StoryboardWorkspace {
                 this.isInteracting = true;
                 startPos = { x: e.clientX - this.offset.x, y: e.clientY - this.offset.y };
             }
+        };
+
+        this.canvasContainer.ondblclick = (e) => {
+            if (e.button !== 0) return;
+            if (!this.isCanvasBackgroundTarget(e.target)) return;
+            e.preventDefault();
+            this.openExtensionPicker({ clientX: e.clientX, clientY: e.clientY });
         };
 
         this.minimap.onmousedown = (e) => {
@@ -2569,10 +3846,16 @@ class StoryboardWorkspace {
 
         this.canvasContainer.oncontextmenu = (e) => {
             e.preventDefault();
+            this.closeExtensionPicker();
             this.showContextMenu(e.clientX, e.clientY);
         };
 
         window.addEventListener("mousedown", (e) => {
+            if (this.extensionPickerOpen &&
+                !this.extensionPicker?.contains(e.target) &&
+                !this.openPickerButton?.contains(e.target)) {
+                this.closeExtensionPicker();
+            }
             if (!this.contextMenu.contains(e.target)) {
                 this.contextMenu.style.display = "none";
             }
@@ -2608,11 +3891,12 @@ class StoryboardWorkspace {
         };
 
         if (this.boardData.selection.length > 0) {
-            this.contextMenu.appendChild(createButton("Bring to Front", () => document.getElementById("action-front")?.click()));
-            this.contextMenu.appendChild(createButton("Send to Back", () => document.getElementById("action-back")?.click()));
             const selectedItems = this.boardData.selection
                 .map(id => this.boardData.items.find(i => i.id === id))
                 .filter(Boolean);
+            const moodboardItems = selectedItems.filter(item => this.isMoodboardContentItem(item));
+            this.contextMenu.appendChild(createButton("Bring to Front", () => document.getElementById("action-front")?.click()));
+            this.contextMenu.appendChild(createButton("Send to Back", () => document.getElementById("action-back")?.click()));
             const anyPinned = selectedItems.some(i => i.pinned);
             const pinLabel = anyPinned ? "Unpin Selected" : "Pin Selected";
             this.contextMenu.appendChild(createButton(pinLabel, () => {
@@ -2620,9 +3904,110 @@ class StoryboardWorkspace {
                 this.renderBoard();
                 this.saveBoard();
             }));
+
+            if (moodboardItems.length > 1) {
+                this.contextMenu.appendChild(createButton("Scatter as Moodboard", () => {
+                    this.arrangeItemsAsMoodboard(moodboardItems);
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+
+                this.contextMenu.appendChild(createButton("Arrange as Story Strip", () => {
+                    this.arrangeItemsAsStoryStrip(moodboardItems);
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+
+                this.contextMenu.appendChild(createButton("Stack as Pile", () => {
+                    this.arrangeItemsAsStack(moodboardItems);
+                    this.restackItems(moodboardItems, (a, b) => (b.w * b.h) - (a.w * a.h));
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+            }
+
+            const tiltedSelection = moodboardItems.filter(item => this.isTiltableItem(item) && this.getItemRotation(item) !== 0);
+            if (tiltedSelection.length > 0) {
+                this.contextMenu.appendChild(createButton("Straighten Selection", () => {
+                    this.straightenItems(tiltedSelection);
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+            }
+
+            if (moodboardItems.length > 0) {
+                this.contextMenu.appendChild(createButton("Frame Selection", () => {
+                    const frame = this.createFrameFromItems(moodboardItems);
+                    this.renderBoard();
+                    this.saveBoard();
+                    const frameEl = frame ? this.itemElements.get(frame.id) : null;
+                    if (frameEl) this.updateFramePalette(frameEl, frame);
+                }));
+            }
+
+            const presentableItems = selectedItems.filter(item => isMediaPresentationItem(item));
+            if (presentableItems.length > 0) {
+                this.contextMenu.appendChild(createSeparator());
+                this.contextMenu.appendChild(createHeader("Presentation"));
+                this.contextMenu.appendChild(createButton("Make Clean", () => {
+                    this.applyMediaPresentation(presentableItems, "clean");
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+                this.contextMenu.appendChild(createButton("Make Story Panels", () => {
+                    this.applyMediaPresentation(presentableItems, "panel");
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+                this.contextMenu.appendChild(createButton("Make Polaroids", () => {
+                    this.applyMediaPresentation(presentableItems, "polaroid");
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+            }
+
+            const presentableFrames = selectedItems.filter(item => isFramePresentationItem(item));
+            if (presentableFrames.length > 0) {
+                this.contextMenu.appendChild(createSeparator());
+                this.contextMenu.appendChild(createHeader("Frame Sequence"));
+                this.contextMenu.appendChild(createButton("Renumber Frames", () => {
+                    this.renumberFrames(presentableFrames);
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+                this.contextMenu.appendChild(createSeparator());
+                this.contextMenu.appendChild(createHeader("Frame Style"));
+                this.contextMenu.appendChild(createButton("Make Outline Frames", () => {
+                    this.applyFramePresentation(presentableFrames, "outline");
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+                this.contextMenu.appendChild(createButton("Make Board Frames", () => {
+                    this.applyFramePresentation(presentableFrames, "board");
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+                this.contextMenu.appendChild(createButton("Make Spotlight Frames", () => {
+                    this.applyFramePresentation(presentableFrames, "spotlight");
+                    this.renderBoard();
+                    this.saveBoard();
+                }));
+            }
             
             if (this.boardData.selection.length === 1) {
                 const item = this.boardData.items.find(i => i.id === this.boardData.selection[0]);
+                if (item.type === "frame") {
+                    const frameItems = this.getItemsInFrame(item);
+                    if (frameItems.length > 1) {
+                        this.contextMenu.appendChild(createSeparator());
+                        this.contextMenu.appendChild(createHeader("Frame Layout"));
+                        this.contextMenu.appendChild(createButton("Auto Arrange In Frame", () => document.getElementById("action-auto-layout")?.click()));
+                        this.contextMenu.appendChild(createButton("Moodboard Layout In Frame", () => document.getElementById("action-moodboard-layout")?.click()));
+                        this.contextMenu.appendChild(createButton("Story Strip In Frame", () => document.getElementById("action-story-strip-layout")?.click()));
+                        this.contextMenu.appendChild(createButton("Stack Layout In Frame", () => document.getElementById("action-stack-layout")?.click()));
+                    }
+                }
+
                 if (item.type === "image" || item.type === "video" || item.type === "frame") {
                     this.contextMenu.appendChild(createSeparator());
                     this.contextMenu.appendChild(createHeader("Set as Reference"));
@@ -2664,9 +4049,31 @@ class StoryboardWorkspace {
                 else document.getElementById("action-delete-selected")?.click();
             }, "danger"));
         } else {
-            this.contextMenu.appendChild(createButton("Add Slot", () => document.getElementById("storyboard-add-slot")?.click()));
-            this.contextMenu.appendChild(createButton("Add Note", () => document.getElementById("storyboard-add-note")?.click()));
-            this.contextMenu.appendChild(createButton("Add Frame", () => document.getElementById("storyboard-add-frame")?.click()));
+            this.contextMenu.appendChild(createButton("Open Node/Widget Picker", () => {
+                this.openExtensionPicker({ clientX: x, clientY: y });
+            }));
+            this.contextMenu.appendChild(createSeparator());
+
+            const toolbarSections = [];
+            const toolbarGroups = new Map();
+            this.extensionRegistry.listToolbarExtensions().forEach((extension) => {
+                const section = extension.toolbar?.section || "Insert";
+                if (!toolbarGroups.has(section)) {
+                    toolbarGroups.set(section, []);
+                    toolbarSections.push(section);
+                }
+                toolbarGroups.get(section).push(extension);
+            });
+
+            toolbarSections.forEach((section, index) => {
+                if (index > 0) this.contextMenu.appendChild(createSeparator());
+                this.contextMenu.appendChild(createHeader(section));
+                toolbarGroups.get(section).forEach((extension) => {
+                    this.contextMenu.appendChild(createButton(extension.toolbar.label, () => {
+                        void this.runToolbarExtension(extension.type);
+                    }));
+                });
+            });
         }
 
         // Viewport constraint
@@ -2687,6 +4094,7 @@ class StoryboardWorkspace {
 
     updateTransform() {
         this.canvas.style.transform = `translate(${this.offset.x}px, ${this.offset.y}px) scale(${this.scale})`;
+        this.updateGridOverlay();
         this.updateMinimap();
         this.updateMinimapControls();
     }

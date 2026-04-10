@@ -1,10 +1,20 @@
 import os
 import torch
-import json
 import uuid
-from PIL import Image
-import numpy as np
+
+from .storyboard_media_utils import (
+    batch_image_tensors,
+    blank_image_tensor,
+    blank_mask_tensor,
+    load_item_image_tensor,
+    pil_to_image_tensor,
+)
 from .storyboard_store import store
+
+
+def _items_from_ids(items, item_ids):
+    item_map = {item.get("id"): item for item in items}
+    return [item_map[item_id] for item_id in item_ids if item_id in item_map]
 
 class Storyboard:
     @classmethod
@@ -42,6 +52,9 @@ class Storyboard:
     CATEGORY = "Storyboard"
 
     def process(self, action="none", target_id="", board_id="default", version=0, prompt="", images=None, manifest_in=None, clip=None):
+        if manifest_in and isinstance(manifest_in, dict) and manifest_in.get("board_id"):
+            board_id = manifest_in["board_id"]
+
         board_data = store.get_board(board_id)
         
         if action == "clear":
@@ -56,59 +69,77 @@ class Storyboard:
             cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
             conditioning = [[cond, {"pooled_output": pooled}]]
         
-        # Reference images
-        refs = [torch.zeros((1, 64, 64, 3)) for _ in range(8)]
-        ref_videos = ["" for _ in range(8)]
         items = board_data.get("items", [])
-        
-        # Sort items to maintain layering during flattening
-        items = sorted(items, key=lambda x: (x.get("type") != "frame", items.index(x)))
+        selection_ids = board_data.get("selection", [])
+        selected_items = _items_from_ids(items, selection_ids)
+        selected_tensors = []
+        selected_meta_items = []
 
-        for item in items:
-            ref_idx = item.get("ref_id")
-            if not ref_idx or not (1 <= ref_idx <= 8):
+        for item in selected_items:
+            image_tensor = load_item_image_tensor(
+                store,
+                board_id,
+                item,
+                allow_frames=item.get("type") == "frame",
+                frame_scale=2.0,
+            )
+            if image_tensor is None:
+                continue
+            selected_tensors.append(image_tensor)
+            selected_meta_items.append(item)
+
+        if selected_tensors:
+            selected_batch = batch_image_tensors(selected_tensors)
+            selected_image = selected_batch[:1]
+            selected_mask = blank_mask_tensor(
+                width=int(selected_image.shape[2]),
+                height=int(selected_image.shape[1]),
+            )
+        else:
+            selected_image = blank_image_tensor()
+            selected_batch = blank_image_tensor()
+            selected_mask = blank_mask_tensor()
+
+        selected_meta = {
+            "board_id": board_id,
+            "selected_ids": [item.get("id") for item in selected_meta_items],
+            "selected_count": len(selected_meta_items),
+            "items": selected_meta_items,
+        }
+
+        board_preview_image = store.render_board_preview(board_id)
+        board_preview = pil_to_image_tensor(board_preview_image) if board_preview_image is not None else blank_image_tensor()
+
+        # Reference images
+        refs = [blank_image_tensor() for _ in range(8)]
+        ref_videos = ["" for _ in range(8)]
+        item_order = {id(item): index for index, item in enumerate(items)}
+        ordered_items = sorted(items, key=lambda item: (item.get("type") != "frame", item_order.get(id(item), 0)))
+
+        for item in ordered_items:
+            try:
+                ref_idx = int(item.get("ref_id"))
+            except (TypeError, ValueError):
+                ref_idx = 0
+
+            if not (1 <= ref_idx <= 8):
                 continue
 
-            img_path = None
-            if item.get("type") == "image" and item.get("image_ref"):
-                img_path = os.path.join(store._get_assets_path(board_id), item["image_ref"])
-            elif item.get("type") == "video" and item.get("video_ref"):
+            if item.get("type") == "video" and item.get("video_ref"):
                 ref_videos[ref_idx - 1] = os.path.join(store._get_assets_path(board_id), item["video_ref"])
                 continue
-            elif item.get("type") == "frame":
-                # Automatically flatten frame
-                filename = store.flatten_frame(board_id, item["id"], scale=2.0)
-                if filename:
-                    img_path = os.path.join(store._get_assets_path(board_id), filename)
 
-            if img_path and os.path.exists(img_path):
-                img = Image.open(img_path).convert("RGB")
-                
-                # Apply crop if present
-                crop = item.get("crop")
-                if crop:
-                    w, h = img.size
-                    left = int(crop["x"] * w)
-                    top = int(crop["y"] * h)
-                    right = int((crop["x"] + crop["w"]) * w)
-                    bottom = int((crop["y"] + crop["h"]) * h)
-                    # Ensure valid crop boundaries
-                    left = max(0, min(w - 1, left))
-                    top = max(0, min(h - 1, top))
-                    right = max(left + 1, min(w, right))
-                    bottom = max(top + 1, min(h, bottom))
-                    img = img.crop((left, top, right, bottom))
+            image_tensor = load_item_image_tensor(
+                store,
+                board_id,
+                item,
+                allow_frames=item.get("type") == "frame",
+                frame_scale=2.0,
+            )
+            if image_tensor is not None:
+                refs[ref_idx - 1] = image_tensor
 
-                img_np = np.array(img).astype(np.float32) / 255.0
-                refs[ref_idx - 1] = torch.from_numpy(img_np).unsqueeze(0)
-        
-        # Return currently selected images and manifest
-        # (This is a simplified implementation for v1)
-        dummy_image = torch.zeros((1, 64, 64, 3))
-        dummy_mask = torch.zeros((1, 64, 64))
-        dummy_json = {}
-        
-        return (dummy_image, dummy_image, dummy_mask, dummy_json, board_data, dummy_image, conditioning, *refs, *ref_videos)
+        return (selected_image, selected_batch, selected_mask, selected_meta, board_data, board_preview, conditioning, *refs, *ref_videos)
 
 class StoryboardSend:
     @classmethod
@@ -407,50 +438,55 @@ class StoryboardRead:
         items = board_manifest.get("items", [])
         selection = board_manifest.get("selection", [])
         board_id = board_manifest.get("board_id")
-        
-        filtered_items = []
-        if read_mode == "first_selected" and selection:
-            filtered_items = [next((item for item in items if item["id"] == selection[0]), None)]
-        elif read_mode == "all_selected_batch" and selection:
-            filtered_items = [item for item in items if item["id"] in selection]
+        if not board_id:
+            return (blank_image_tensor(), {}, "")
+
+        if read_mode == "flattened_board":
+            preview = store.render_board_preview(board_id)
+            if preview is None:
+                return (blank_image_tensor(), {}, "")
+            metadata = {
+                "board_id": board_id,
+                "read_mode": read_mode,
+                "item_count": len(items),
+            }
+            return (pil_to_image_tensor(preview), metadata, "flattened_board")
+
+        if read_mode == "first_selected":
+            filtered_items = _items_from_ids(items, selection[:1])
+        elif read_mode == "all_selected_batch":
+            filtered_items = _items_from_ids(items, selection)
         elif read_mode == "by_tag":
-            filtered_items = [item for item in items if tag_filter in item.get("tags", [])]
+            filtered_items = [item for item in items if tag_filter and tag_filter in item.get("tags", [])]
         else:
-            # Default to all items
             filtered_items = items
-            
-        filtered_items = [item for item in filtered_items if item and item.get("image_ref")]
-        
-        if not filtered_items:
-            dummy_image = torch.zeros((1, 64, 64, 3))
-            return (dummy_image, {}, "")
-            
-        # Load images
-        images = []
+
+        loaded_items = []
+        loaded_tensors = []
         for item in filtered_items:
-            img_path = os.path.join(store._get_assets_path(board_id), item["image_ref"])
-            if os.path.exists(img_path):
-                img = Image.open(img_path).convert("RGB")
-                img_np = np.array(img).astype(np.float32) / 255.0
-                images.append(torch.from_numpy(img_np))
-        
-        if not images:
-            dummy_image = torch.zeros((1, 64, 64, 3))
-            return (dummy_image, {}, "")
-            
-        # Stack images into a batch
-        # Ensure all images are same size for batching (simple approach: resize to first)
-        target_size = images[0].shape[:2]
-        resized_images = []
-        for img in images:
-            if img.shape[:2] != target_size:
-                # Resize logic needed here if we want to batch differently sized images
-                pass
-            resized_images.append(img.unsqueeze(0))
-            
-        batch = torch.cat(resized_images, dim=0)
-        metadata = {"items": filtered_items}
-        ordering = ",".join([item["id"] for item in filtered_items])
+            image_tensor = load_item_image_tensor(
+                store,
+                board_id,
+                item,
+                allow_frames=item.get("type") == "frame",
+                frame_scale=2.0,
+            )
+            if image_tensor is None:
+                continue
+            loaded_items.append(item)
+            loaded_tensors.append(image_tensor)
+
+        if not loaded_tensors:
+            return (blank_image_tensor(), {}, "")
+
+        batch = batch_image_tensors(loaded_tensors)
+        metadata = {
+            "board_id": board_id,
+            "read_mode": read_mode,
+            "tag_filter": tag_filter,
+            "items": loaded_items,
+        }
+        ordering = ",".join([item["id"] for item in loaded_items if item.get("id")])
         
         return (batch, metadata, ordering)
 

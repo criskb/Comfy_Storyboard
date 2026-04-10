@@ -1,0 +1,95 @@
+export const DEFAULT_CUSTOM_ACCENT = "#ffffff";
+export const CUSTOM_EXTENSION_INSPECTOR_SUMMARY = '<div class="inspector-summary">Custom storyboard extension</div>';
+
+export function getViewportPlacement(workspace, x = 100, y = 100) {
+    return {
+        x: -workspace.offset.x / workspace.scale + x,
+        y: -workspace.offset.y / workspace.scale + y,
+    };
+}
+
+export function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+export function normalizeHexColor(value, fallback = DEFAULT_CUSTOM_ACCENT) {
+    const text = String(value ?? "").trim();
+    if (!text) return fallback;
+    const normalized = text.startsWith("#") ? text : `#${text}`;
+    if (/^#[0-9a-fA-F]{6}$/.test(normalized)) return normalized.toLowerCase();
+    if (/^#[0-9a-fA-F]{3}$/.test(normalized)) {
+        return `#${normalized[1]}${normalized[1]}${normalized[2]}${normalized[2]}${normalized[3]}${normalized[3]}`.toLowerCase();
+    }
+    return fallback;
+}
+
+export function getAccentColor(item, fallback = DEFAULT_CUSTOM_ACCENT) {
+    return normalizeHexColor(item?.accent, fallback);
+}
+
+export function applyAccentVariables(workspace, element, item, fallback = DEFAULT_CUSTOM_ACCENT) {
+    const accent = getAccentColor(item, fallback);
+    element.style.setProperty("--storyboard-custom-accent", accent);
+    element.style.setProperty("--storyboard-custom-accent-contrast", workspace.getContrastColor(accent));
+    return accent;
+}
+
+export function refreshCustomItem(workspace, item) {
+    const element = workspace.itemElements.get(item.id);
+    if (element) workspace.updateItemContent(element, item, false);
+}
+
+export function bindValueField(id, handlers = {}) {
+    const input = document.getElementById(id);
+    if (!input) return null;
+    const { onInput = null, onChange = null } = handlers;
+    if (typeof onInput === "function") {
+        input.oninput = () => onInput(input.value, input);
+    }
+    if (typeof onChange === "function") {
+        input.onchange = () => onChange(input.value, input);
+    }
+    return input;
+}
+
+export function createCustomFieldBinder(workspace, item) {
+    return (id, assign, { refresh = true } = {}) => bindValueField(id, {
+        onInput: (value, input) => {
+            assign(value, input);
+            if (refresh) refreshCustomItem(workspace, item);
+        },
+        onChange: (value, input) => {
+            assign(value, input);
+            if (refresh) refreshCustomItem(workspace, item);
+            workspace.saveBoard();
+        },
+    });
+}
+
+export function parseColorList(value, fallbackColors = []) {
+    const tokens = String(value ?? "")
+        .split(/[\s,;|]+/)
+        .map(token => token.trim())
+        .filter(Boolean);
+    const colors = tokens
+        .map(token => normalizeHexColor(token, ""))
+        .filter(Boolean)
+        .slice(0, 6);
+    if (colors.length) return colors;
+    return (fallbackColors || [])
+        .map(color => normalizeHexColor(color, ""))
+        .filter(Boolean)
+        .slice(0, 6);
+}
+
+export function formatColorList(colors) {
+    return (colors || [])
+        .map(color => normalizeHexColor(color, ""))
+        .filter(Boolean)
+        .join(", ");
+}
