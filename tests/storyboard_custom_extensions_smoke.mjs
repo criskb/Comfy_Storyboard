@@ -21,12 +21,36 @@ const workspace = {
 const demoResult = demoPackStoryboardExtension.onTrigger(workspace);
 assert.ok(demoResult);
 assert.ok(Array.isArray(demoResult.items));
-assert.ok(demoResult.items.length >= 10);
+assert.ok(demoResult.items.length >= 31);
 assert.ok(demoResult.items.every((item) => item.sandbox_collection === "custom_demo"));
 assert.ok(demoResult.selection.length > 0);
 
 const registeredTypes = new Set(customStoryboardExtensions.map((extension) => extension.type));
-["character_card", "location_card", "dialogue_card", "camera_move"].forEach((type) => {
+[
+    "character_card",
+    "prompt_card",
+    "checklist_card",
+    "reference_basket",
+    "location_card",
+    "dialogue_card",
+    "wardrobe_card",
+    "lens_card",
+    "set_dressing_card",
+    "continuity_note",
+    "camera_move",
+    "hair_makeup_note",
+    "stunt_note",
+    "lighting_cue",
+    "prop_card",
+    "sound_cue",
+    "transition_card",
+    "editorial_card",
+    "production_note",
+    "graphics_note",
+    "grade_card",
+    "vfx_note",
+    "blocking_note",
+].forEach((type) => {
     assert.ok(registeredTypes.has(type));
     assert.ok(demoResult.items.some((item) => item.type === type));
 });

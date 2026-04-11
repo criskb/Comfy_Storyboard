@@ -42,11 +42,17 @@ export const sceneDividerStoryboardExtension = {
             body = document.createElement("div");
             body.className = "scene-divider-body";
             body.innerHTML = `
+                <div class="scene-divider-hit-area" aria-hidden="true"></div>
                 <div class="scene-divider-line"></div>
                 <div class="scene-divider-pill"></div>
                 <div class="scene-divider-subtitle"></div>
             `;
             element.appendChild(body);
+        }
+
+        const hitArea = body.querySelector(".scene-divider-hit-area");
+        if (hitArea) {
+            hitArea.onmousedown = (event) => workspace.beginItemDrag(item.id, event);
         }
 
         body.querySelector(".scene-divider-pill").innerText = (item.label || "Scene Divider").trim();

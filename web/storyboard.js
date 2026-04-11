@@ -154,6 +154,31 @@ const TOOLBAR_ICONS = {
             <rect x="4.5" y="13" width="15" height="6" rx="2"></rect>
         </svg>
     `,
+    promptCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="6" width="15" height="12" rx="2"></rect>
+            <path d="M8 10h8"></path>
+            <path d="M8 14h5"></path>
+            <path d="M18 19.5v-4"></path>
+        </svg>
+    `,
+    checklistCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 7.5h10"></path>
+            <path d="M8 12h10"></path>
+            <path d="M8 16.5h10"></path>
+            <path d="M4.5 7.5 5.8 8.8 7.5 6.8"></path>
+            <path d="M4.5 12 5.8 13.3 7.5 11.3"></path>
+            <path d="M4.5 16.5 5.8 17.8 7.5 15.8"></path>
+        </svg>
+    `,
+    referenceBasket: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5.5 9h13l-1 9h-11z"></path>
+            <path d="M9 9 12 5.5 15 9"></path>
+            <path d="M9 13.5h6"></path>
+        </svg>
+    `,
     characterCard: `
         <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="8" r="3"></circle>
@@ -181,6 +206,125 @@ const TOOLBAR_ICONS = {
             <path d="M15.5 7.5l2 2-2 2"></path>
             <path d="M13.5 14.5h4"></path>
             <path d="M15.5 12.5l2 2-2 2"></path>
+        </svg>
+    `,
+    lightingCue: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3.5 7 11h3l-1 9 5-7.5h-3l1-9Z"></path>
+            <path d="M5 19.5h14"></path>
+        </svg>
+    `,
+    propCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="6" width="15" height="12" rx="3"></rect>
+            <path d="M9 10h6"></path>
+            <path d="M12 6v12"></path>
+        </svg>
+    `,
+    soundCue: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 14h2"></path>
+            <path d="M8 10v8"></path>
+            <path d="M12 7v14"></path>
+            <path d="M16 10v8"></path>
+            <path d="M20 14h-2"></path>
+        </svg>
+    `,
+    transitionCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4.5 12h11"></path>
+            <path d="M12.5 8.5 16 12l-3.5 3.5"></path>
+            <path d="M18 6v12"></path>
+        </svg>
+    `,
+    wardrobeCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 6.5 10.5 4h3L16 6.5"></path>
+            <path d="M7 20V9l2.5-2.5"></path>
+            <path d="M17 20V9l-2.5-2.5"></path>
+            <path d="M9.5 6.5 12 9l2.5-2.5"></path>
+        </svg>
+    `,
+    lensCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="6.5"></circle>
+            <circle cx="12" cy="12" r="2.5"></circle>
+            <path d="M19 8.5 21 6.5"></path>
+        </svg>
+    `,
+    setDressingCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="8" width="15" height="11" rx="2"></rect>
+            <path d="M8 8V5.5"></path>
+            <path d="M16 8V5.5"></path>
+            <path d="M8 12h8"></path>
+        </svg>
+    `,
+    hairMakeupNote: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M7 18.5c0-4 2.2-6.5 5-6.5s5 2.5 5 6.5"></path>
+            <path d="M8 9.5c.8-2.5 2.2-4 4-4s3.2 1.5 4 4"></path>
+            <path d="M12 12V9.5"></path>
+        </svg>
+    `,
+    stuntNote: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M7 18.5 12 5.5l5 13"></path>
+            <path d="M9 13h6"></path>
+        </svg>
+    `,
+    continuityNote: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5.5 8.5h8"></path>
+            <path d="M10.5 5.5 13.5 8.5l-3 3"></path>
+            <path d="M18.5 15.5h-8"></path>
+            <path d="M13.5 12.5 10.5 15.5l3 3"></path>
+        </svg>
+    `,
+    productionNote: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5" y="6" width="14" height="12.5" rx="2"></rect>
+            <path d="M8 10h8"></path>
+            <path d="M8 13.5h5"></path>
+        </svg>
+    `,
+    vfxNote: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 4.5v4"></path>
+            <path d="M12 15.5v4"></path>
+            <path d="M4.5 12h4"></path>
+            <path d="M15.5 12h4"></path>
+            <circle cx="12" cy="12" r="3.5"></circle>
+        </svg>
+    `,
+    graphicsNote: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="6" width="15" height="12" rx="2"></rect>
+            <path d="M8 10h8"></path>
+            <path d="M8 14h4"></path>
+            <path d="M15.5 14h.01"></path>
+        </svg>
+    `,
+    blockingNote: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="7" cy="8" r="1.5"></circle>
+            <circle cx="17" cy="16" r="1.5"></circle>
+            <path d="M8.5 9.5 15.5 14.5"></path>
+            <path d="M13 14.5h2.5v-2.5"></path>
+        </svg>
+    `,
+    editorialCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 6.5h14"></path>
+            <path d="M5 12h8"></path>
+            <path d="M5 17.5h14"></path>
+            <path d="M16 10.5 19 12l-3 1.5"></path>
+        </svg>
+    `,
+    gradeCard: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 16.5 9 12l3 2.5 3-4 4 6"></path>
+            <path d="M5 19.5h14"></path>
         </svg>
     `,
     picker: `
@@ -1266,6 +1410,48 @@ class StoryboardWorkspace {
         }
     }
 
+    setStoryboardPrompt(nextPrompt, { mode = "replace" } = {}) {
+        const promptEl = document.getElementById("storyboard-prompt");
+        const currentValue = promptEl?.value || "";
+        const trimmedNext = String(nextPrompt ?? "").trim();
+        if (!trimmedNext) return currentValue;
+
+        const mergedValue = mode === "append" && currentValue.trim()
+            ? `${currentValue.trim()}\n${trimmedNext}`
+            : trimmedNext;
+
+        if (promptEl) promptEl.value = mergedValue;
+        if (this.node) {
+            const promptWidget = this.node.widgets.find(w => w.name === "prompt");
+            if (promptWidget) promptWidget.value = mergedValue;
+        }
+        return mergedValue;
+    }
+
+    getStoryboardItemLabel(item) {
+        if (!item) return "Unknown item";
+        const label = String(item.label || "").trim();
+        if (label) return label;
+        return String(item.type || "item")
+            .replace(/_/g, " ")
+            .replace(/\b\w/g, (match) => match.toUpperCase());
+    }
+
+    selectStoryboardItems(itemIds) {
+        const validIds = (itemIds || []).filter((id) => this.boardData.items.some((item) => item.id === id));
+        this.boardData.selection = validIds;
+        this.renderBoard();
+    }
+
+    async captureReferenceBasket(itemId) {
+        const basket = this.boardData.items.find((item) => item.id === itemId);
+        if (!basket || basket.type !== "reference_basket") return;
+        basket.linked_ids = this.boardData.selection.filter((id) => id && id !== itemId);
+        const element = this.itemElements.get(itemId);
+        if (element) this.updateItemContent(element, basket, false);
+        await this.saveBoard();
+    }
+
     getContrastColor(hexcolor) {
         if (!hexcolor) return "#333";
         // If hexcolor is something like "#ffeb3b"
@@ -1660,6 +1846,22 @@ class StoryboardWorkspace {
 
     addItemInteractions(el, initialItem) {
         const itemId = initialItem.id;
+        const isInteractiveTarget = (target) => {
+            if (!(target instanceof Element)) return false;
+            return Boolean(target.closest([
+                "input",
+                "textarea",
+                "select",
+                "button",
+                "[contenteditable='true']",
+                ".palette-color",
+                ".storyboard-resize-handle",
+                ".storyboard-crop-glyph",
+                ".slot-add-glyph",
+                "video",
+                "audio",
+            ].join(", ")));
+        };
         
         // Crop glyph
         if (initialItem.type === "image") {
@@ -1788,104 +1990,106 @@ class StoryboardWorkspace {
         };
         el.appendChild(resizeHandle);
         
-        el.onmousedown = (e) => {
-            const item = this.boardData.items.find(i => i.id === itemId);
-            if (!item) return;
-
-            if (e.button !== 0) return;
-            e.stopPropagation();
-            e.preventDefault();
-            
-            // Selection logic
-            if (e.shiftKey) {
-                if (this.boardData.selection.includes(itemId)) {
-                    this.boardData.selection = this.boardData.selection.filter(id => id !== itemId);
-                } else {
-                    this.boardData.selection.push(itemId);
-                }
-            } else {
-                // Single select
-                this.boardData.selection = [itemId];
-            }
-            this.renderBoard();
-
-            if (item.pinned) {
-                this.saveBoard();
-                return;
-            }
-
-            this.isInteracting = true;
-
-            const startX = e.clientX;
-            const startY = e.clientY;
-            
-            const itemsToMoveIds = new Set(this.boardData.selection);
-            this.boardData.selection.forEach(id => {
-                const it = this.boardData.items.find(i => i.id === id);
-                if (it && it.type === "frame") {
-                    this.boardData.items.forEach(other => {
-                        if (other.id !== it.id &&
-                            other.x >= it.x && other.y >= it.y &&
-                            (other.x + other.w) <= (it.x + it.w) &&
-                            (other.y + other.h) <= (it.y + it.h)) {
-                            itemsToMoveIds.add(other.id);
-                        }
-                    });
-                }
-            });
-
-            const selectedElements = Array.from(itemsToMoveIds).map(id => {
-                const it = this.boardData.items.find(i => i.id === id);
-                const domEl = this.itemElements.get(id);
-                return { item: it, domEl, startX: it.x, startY: it.y };
-            }).filter(entry => entry.domEl && entry.item);
-            const anchorEntry = selectedElements.find(entry => entry.item.id === itemId) || selectedElements[0];
-
-            const onMouseMove = (moveEvent) => {
-                let dx = (moveEvent.clientX - startX) / this.scale;
-                let dy = (moveEvent.clientY - startY) / this.scale;
-                const settings = this.getBoardSettings();
-                if (settings.snap && anchorEntry) {
-                    const snapped = snapPointToGrid({
-                        x: anchorEntry.startX + dx,
-                        y: anchorEntry.startY + dy,
-                    }, settings);
-                    dx = snapped.x - anchorEntry.startX;
-                    dy = snapped.y - anchorEntry.startY;
-                }
-
-                selectedElements.forEach(entry => {
-                    entry.item.x = entry.startX + dx;
-                    entry.item.y = entry.startY + dy;
-                    entry.domEl.style.left = `${entry.item.x}px`;
-                    entry.domEl.style.top = `${entry.item.y}px`;
-                });
-            };
-
-            const onMouseUp = () => {
-                this.isInteracting = false;
-                window.removeEventListener("mousemove", onMouseMove);
-                window.removeEventListener("mouseup", onMouseUp);
-                
-                if (this.needsReload) {
-                    this.loadBoard();
-                } else {
-                    this.saveBoard();
-                    this.renderBoard();
-
-                    // Force update palettes after drag/resize finishes
-                    this.boardData.items.forEach(it => {
-                        if (it.type === "frame") {
-                            const el = this.itemElements.get(it.id);
-                            if (el) this.updateFramePalette(el, it);
-                        }
-                    });
-                }
-            };
-
-            window.addEventListener("mousemove", onMouseMove);
-            window.addEventListener("mouseup", onMouseUp);
+        const handleItemMouseDown = (e) => {
+            if (isInteractiveTarget(e.target)) return;
+            this.beginItemDrag(itemId, e);
         };
+        el.addEventListener("mousedown", handleItemMouseDown, true);
+    }
+
+    beginItemDrag(itemId, e) {
+        const item = this.boardData.items.find(i => i.id === itemId);
+        if (!item) return;
+        if (e.button !== 0) return;
+
+        e.stopPropagation();
+        e.preventDefault();
+
+        if (e.shiftKey) {
+            if (this.boardData.selection.includes(itemId)) {
+                this.boardData.selection = this.boardData.selection.filter(id => id !== itemId);
+            } else {
+                this.boardData.selection.push(itemId);
+            }
+        } else {
+            this.boardData.selection = [itemId];
+        }
+        this.renderBoard();
+
+        if (item.pinned) {
+            this.saveBoard();
+            return;
+        }
+
+        this.isInteracting = true;
+        const startX = e.clientX;
+        const startY = e.clientY;
+
+        const itemsToMoveIds = new Set(this.boardData.selection);
+        this.boardData.selection.forEach(id => {
+            const it = this.boardData.items.find(i => i.id === id);
+            if (it && it.type === "frame") {
+                this.boardData.items.forEach(other => {
+                    if (other.id !== it.id &&
+                        other.x >= it.x && other.y >= it.y &&
+                        (other.x + other.w) <= (it.x + it.w) &&
+                        (other.y + other.h) <= (it.y + it.h)) {
+                        itemsToMoveIds.add(other.id);
+                    }
+                });
+            }
+        });
+
+        const selectedElements = Array.from(itemsToMoveIds).map(id => {
+            const it = this.boardData.items.find(i => i.id === id);
+            const domEl = this.itemElements.get(id);
+            return { item: it, domEl, startX: it.x, startY: it.y };
+        }).filter(entry => entry.domEl && entry.item);
+        const anchorEntry = selectedElements.find(entry => entry.item.id === itemId) || selectedElements[0];
+
+        const onMouseMove = (moveEvent) => {
+            let dx = (moveEvent.clientX - startX) / this.scale;
+            let dy = (moveEvent.clientY - startY) / this.scale;
+            const settings = this.getBoardSettings();
+            if (settings.snap && anchorEntry) {
+                const snapped = snapPointToGrid({
+                    x: anchorEntry.startX + dx,
+                    y: anchorEntry.startY + dy,
+                }, settings);
+                dx = snapped.x - anchorEntry.startX;
+                dy = snapped.y - anchorEntry.startY;
+            }
+
+            selectedElements.forEach(entry => {
+                entry.item.x = entry.startX + dx;
+                entry.item.y = entry.startY + dy;
+                entry.domEl.style.left = `${entry.item.x}px`;
+                entry.domEl.style.top = `${entry.item.y}px`;
+            });
+        };
+
+        const onMouseUp = () => {
+            this.isInteracting = false;
+            window.removeEventListener("mousemove", onMouseMove);
+            window.removeEventListener("mouseup", onMouseUp);
+
+            if (this.needsReload) {
+                this.loadBoard();
+            } else {
+                this.saveBoard();
+                this.renderBoard();
+
+                this.boardData.items.forEach(it => {
+                    if (it.type === "frame") {
+                        const frameEl = this.itemElements.get(it.id);
+                        if (frameEl) this.updateFramePalette(frameEl, it);
+                    }
+                });
+            }
+        };
+
+        window.addEventListener("mousemove", onMouseMove);
+        window.addEventListener("mouseup", onMouseUp);
     }
 
     renderCropUI(el, item) {
@@ -4052,41 +4256,36 @@ class StoryboardWorkspace {
             this.contextMenu.appendChild(createButton("Open Node/Widget Picker", () => {
                 this.openExtensionPicker({ clientX: x, clientY: y });
             }));
-            this.contextMenu.appendChild(createSeparator());
+            const actionExtensions = this.extensionRegistry
+                .listToolbarExtensions()
+                .filter((extension) => typeof extension.onTrigger === "function");
 
-            const toolbarSections = [];
-            const toolbarGroups = new Map();
-            this.extensionRegistry.listToolbarExtensions().forEach((extension) => {
-                const section = extension.toolbar?.section || "Insert";
-                if (!toolbarGroups.has(section)) {
-                    toolbarGroups.set(section, []);
-                    toolbarSections.push(section);
-                }
-                toolbarGroups.get(section).push(extension);
-            });
-
-            toolbarSections.forEach((section, index) => {
-                if (index > 0) this.contextMenu.appendChild(createSeparator());
-                this.contextMenu.appendChild(createHeader(section));
-                toolbarGroups.get(section).forEach((extension) => {
+            if (actionExtensions.length > 0) {
+                this.contextMenu.appendChild(createSeparator());
+                this.contextMenu.appendChild(createHeader("Actions"));
+                actionExtensions.forEach((extension) => {
                     this.contextMenu.appendChild(createButton(extension.toolbar.label, () => {
                         void this.runToolbarExtension(extension.type);
                     }));
                 });
-            });
+            }
         }
 
         // Viewport constraint
         const rect = this.contextMenu.getBoundingClientRect();
+        const margin = 12;
         let left = x;
         let top = y;
 
-        if (left + rect.width > window.innerWidth) {
+        if (left + rect.width > window.innerWidth - margin) {
             left = x - rect.width;
         }
-        if (top + rect.height > window.innerHeight) {
+        if (top + rect.height > window.innerHeight - margin) {
             top = y - rect.height;
         }
+
+        left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
+        top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
 
         this.contextMenu.style.left = `${left}px`;
         this.contextMenu.style.top = `${top}px`;

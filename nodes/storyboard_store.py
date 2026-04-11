@@ -776,6 +776,362 @@ class StoryboardStore:
             self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
             return
 
+        if item_type == "prompt_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(17, 24, 39, 248),
+                outline=(39, 48, 64, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            draw.text((pad, band_h + max(14, int(18 * scale))), "PROMPT", fill=(248, 250, 252, 180))
+            title = str(item.get("label", "") or "").strip() or "Prompt Card"
+            if len(title) > 28:
+                title = f"{title[:25]}..."
+            title_y = band_h + max(30, int(36 * scale))
+            draw.text((pad, title_y), title, fill=(248, 250, 252, 255))
+            prompt_text = str(item.get("prompt_text", "") or "").strip()
+            if prompt_text:
+                max_chars = max(18, min(46, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(prompt_text, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(18, int(24 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 220),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(46, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, rel_h - max(34, int(40 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 176),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "checklist_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            items = item.get("checklist_items", []) or []
+            done_count = sum(1 for entry in items if entry.get("done"))
+            chip_text = f"{done_count}/{len(items) or 0}"
+            chip_w = max(48, int(len(chip_text) * 8 * scale) + int(20 * scale))
+            chip_h = max(18, int(24 * scale))
+            chip_box = [rel_w - pad - chip_w, pad, rel_w - pad, pad + chip_h]
+            draw.rounded_rectangle(chip_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((chip_box[0] + chip_box[2]) / 2.0, (chip_box[1] + chip_box[3]) / 2.0),
+                chip_text,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            title = str(item.get("label", "") or "").strip() or "Checklist Card"
+            if len(title) > 26:
+                title = f"{title[:23]}..."
+            title_y = pad + max(2, int(2 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(15, 23, 42, 255))
+            row_y = chip_box[3] + max(12, int(14 * scale))
+            for index, entry in enumerate(items[:5]):
+                check_size = max(10, int(12 * scale))
+                box_y = row_y + index * max(20, int(24 * scale))
+                draw.rounded_rectangle(
+                    [pad + stripe_w, box_y, pad + stripe_w + check_size, box_y + check_size],
+                    radius=max(2, int(3 * scale)),
+                    outline=(*accent_rgb, 255),
+                    width=max(1, int(2 * scale)),
+                )
+                if entry.get("done"):
+                    draw.line(
+                        [
+                            (pad + stripe_w + max(2, int(3 * scale)), box_y + max(6, int(7 * scale))),
+                            (pad + stripe_w + max(5, int(6 * scale)), box_y + max(9, int(10 * scale))),
+                            (pad + stripe_w + max(10, int(11 * scale)), box_y + max(2, int(3 * scale))),
+                        ],
+                        fill=(*accent_rgb, 255),
+                        width=max(1, int(2 * scale)),
+                    )
+                label = str(entry.get("label", "") or "").strip()
+                if len(label) > 28:
+                    label = f"{label[:25]}..."
+                draw.text(
+                    (pad + stripe_w + max(18, int(22 * scale)), box_y + check_size / 2.0),
+                    label,
+                    fill=(71, 85, 105, 255),
+                    anchor="lm",
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "reference_basket":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(15, 23, 42, 246),
+                outline=(39, 48, 64, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            linked_ids = item.get("linked_ids", []) or []
+            chip_text = str(len(linked_ids))
+            chip_w = max(34, int(len(chip_text) * 8 * scale) + int(18 * scale))
+            chip_h = max(18, int(24 * scale))
+            chip_box = [rel_w - pad - chip_w, band_h + max(8, int(10 * scale)), rel_w - pad, band_h + max(8, int(10 * scale)) + chip_h]
+            draw.rounded_rectangle(chip_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((chip_box[0] + chip_box[2]) / 2.0, (chip_box[1] + chip_box[3]) / 2.0),
+                chip_text,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            title = str(item.get("label", "") or "").strip() or "Reference Basket"
+            if len(title) > 26:
+                title = f"{title[:23]}..."
+            title_y = chip_box[3] + max(10, int(12 * scale))
+            draw.text((pad, title_y), title, fill=(248, 250, 252, 255))
+            preview = ", ".join(linked_ids[:4]) if linked_ids else "No linked items yet"
+            if len(preview) > 42:
+                preview = f"{preview[:39]}..."
+            draw.multiline_text(
+                (pad, title_y + max(18, int(24 * scale))),
+                preview,
+                fill=(226, 232, 240, 216),
+                spacing=max(3, int(4 * scale)),
+            )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(42, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, rel_h - max(34, int(40 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 176),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "lens_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            family = str(item.get("lens_family", "") or "").strip().upper() or "PRIME"
+            family_h = max(18, int(24 * scale))
+            family_w = min(rel_w - (pad * 2), max(72, int(len(family) * 7 * scale) + int(22 * scale)))
+            family_box = [pad, band_h + max(8, int(10 * scale)), pad + family_w, band_h + max(8, int(10 * scale)) + family_h]
+            draw.rounded_rectangle(family_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((family_box[0] + family_box[2]) / 2.0, (family_box[1] + family_box[3]) / 2.0),
+                family,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, band_h + max(20, int(22 * scale))), "Lens", fill=(100, 116, 139, 180), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Lens Card"
+            if len(title) > 28:
+                title = f"{title[:25]}..."
+            title_y = family_box[3] + max(12, int(14 * scale))
+            draw.text((pad, title_y), title, fill=(15, 23, 42, 255))
+            focal = str(item.get("focal_length", "") or "").strip()
+            if focal:
+                draw.text((pad, title_y + max(18, int(22 * scale))), focal.upper(), fill=(100, 116, 139, 196))
+            coverage = str(item.get("coverage", "") or "").strip()
+            if coverage:
+                max_chars = max(16, min(38, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(coverage, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(38, int(44 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(16, min(38, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, rel_h - max(28, int(34 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 216),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "wardrobe_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            priority = str(item.get("wardrobe_priority", "") or "").strip().upper() or "HERO"
+            priority_h = max(18, int(24 * scale))
+            priority_w = min(rel_w - (pad * 2), max(72, int(len(priority) * 7 * scale) + int(22 * scale)))
+            priority_box = [rel_w - pad - priority_w, band_h + max(8, int(10 * scale)), rel_w - pad, band_h + max(8, int(10 * scale)) + priority_h]
+            draw.rounded_rectangle(priority_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((priority_box[0] + priority_box[2]) / 2.0, (priority_box[1] + priority_box[3]) / 2.0),
+                priority,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((pad, band_h + max(14, int(18 * scale))), "WARDROBE", fill=(100, 116, 139, 180))
+            title = str(item.get("label", "") or "").strip() or "Wardrobe Card"
+            if len(title) > 24:
+                title = f"{title[:21]}..."
+            title_y = priority_box[3] + max(12, int(14 * scale))
+            draw.text((pad, title_y), title, fill=(15, 23, 42, 255))
+            silhouette = str(item.get("silhouette", "") or "").strip()
+            if silhouette:
+                max_chars = max(16, min(38, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(silhouette, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(18, int(24 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            palette = str(item.get("palette_note", "") or "").strip()
+            if palette:
+                draw.text(
+                    (pad, rel_h - max(42, int(48 * scale))),
+                    palette.upper(),
+                    fill=(100, 116, 139, 180),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(16, min(38, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, rel_h - max(28, int(34 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 216),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "set_dressing_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(15, 23, 42, 246),
+                outline=(39, 48, 64, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            zone = str(item.get("dressing_zone", "") or "").strip().upper() or "FOREGROUND"
+            zone_h = max(18, int(24 * scale))
+            zone_w = min(rel_w - (pad * 2), max(86, int(len(zone) * 7 * scale) + int(22 * scale)))
+            zone_box = [pad + stripe_w, pad, pad + stripe_w + zone_w, pad + zone_h]
+            draw.rounded_rectangle(zone_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((zone_box[0] + zone_box[2]) / 2.0, (zone_box[1] + zone_box[3]) / 2.0),
+                zone,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, pad + (zone_h / 2.0)), "Set Dressing", fill=(203, 213, 225, 170), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Set Dressing Card"
+            if len(title) > 28:
+                title = f"{title[:25]}..."
+            title_y = zone_box[3] + max(12, int(14 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(248, 250, 252, 255))
+            stack = str(item.get("texture_stack", "") or "").strip()
+            if stack:
+                max_chars = max(18, min(40, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(stack, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 220),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(40, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, rel_h - max(36, int(42 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 178),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
         if item_type == "dialogue_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
             draw = ImageDraw.Draw(item_tile)
@@ -821,6 +1177,122 @@ class StoryboardStore:
                 fill=(248, 250, 252, 240),
                 spacing=max(3, int(4 * scale)),
             )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "hair_makeup_note":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(17, 24, 39, 248),
+                outline=(39, 48, 64, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            area = str(item.get("hmu_area", "") or "").strip().upper() or "HAIR"
+            area_h = max(18, int(24 * scale))
+            area_w = min(rel_w - (pad * 2), max(72, int(len(area) * 7 * scale) + int(22 * scale)))
+            area_box = [pad, band_h + max(8, int(10 * scale)), pad + area_w, band_h + max(8, int(10 * scale)) + area_h]
+            draw.rounded_rectangle(area_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((area_box[0] + area_box[2]) / 2.0, (area_box[1] + area_box[3]) / 2.0),
+                area,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, band_h + max(20, int(22 * scale))), "HMU", fill=(203, 213, 225, 170), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Hair + Makeup Note"
+            if len(title) > 34:
+                title = f"{title[:31]}..."
+            title_y = area_box[3] + max(12, int(14 * scale))
+            draw.text((pad, title_y), title, fill=(248, 250, 252, 255))
+            application = str(item.get("application", "") or "").strip()
+            if application:
+                max_chars = max(18, min(52, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(application, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 216),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(52, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, rel_h - max(36, int(42 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 178),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "stunt_note":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(19, 18, 27, 248),
+                outline=(55, 65, 81, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            level = str(item.get("stunt_level", "") or "").strip().upper() or "COORDINATION"
+            level_h = max(18, int(24 * scale))
+            level_w = min(rel_w - (pad * 2), max(82, int(len(level) * 7 * scale) + int(22 * scale)))
+            level_box = [pad + stripe_w, pad, pad + stripe_w + level_w, pad + level_h]
+            draw.rounded_rectangle(level_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((level_box[0] + level_box[2]) / 2.0, (level_box[1] + level_box[3]) / 2.0),
+                level,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, pad + (level_h / 2.0)), "Stunt", fill=(203, 213, 225, 170), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Stunt Note"
+            if len(title) > 30:
+                title = f"{title[:27]}..."
+            title_y = level_box[3] + max(12, int(14 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(248, 250, 252, 255))
+            rigging = str(item.get("rigging", "") or "").strip()
+            if rigging:
+                max_chars = max(18, min(42, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(rigging, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 216),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(42, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, rel_h - max(36, int(42 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 178),
+                    spacing=max(3, int(4 * scale)),
+                )
             self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
             return
 
@@ -885,6 +1357,627 @@ class StoryboardStore:
                     (pad + stripe_w, title_y + max(14, int(18 * scale))),
                     wrapped,
                     fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "continuity_note":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(15, 23, 42, 246),
+                outline=(39, 48, 64, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            continuity = str(item.get("continuity_type", "") or "").strip().upper() or "PROP MATCH"
+            type_h = max(18, int(24 * scale))
+            type_w = min(rel_w - (pad * 2), max(82, int(len(continuity) * 7 * scale) + int(22 * scale)))
+            type_box = [pad + stripe_w, pad, pad + stripe_w + type_w, pad + type_h]
+            draw.rounded_rectangle(type_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((type_box[0] + type_box[2]) / 2.0, (type_box[1] + type_box[3]) / 2.0),
+                continuity,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, pad + (type_h / 2.0)), "Continuity", fill=(203, 213, 225, 170), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Continuity Note"
+            if len(title) > 30:
+                title = f"{title[:27]}..."
+            title_y = type_box[3] + max(12, int(14 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(248, 250, 252, 255))
+            checkpoint = str(item.get("checkpoint", "") or "").strip()
+            if checkpoint:
+                max_chars = max(18, min(42, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(checkpoint, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 216),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(42, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, rel_h - max(40, int(46 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 178),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "lighting_cue":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(15, 23, 42, 246),
+                outline=(39, 48, 64, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            style = str(item.get("lighting_style", "") or "").strip().upper() or "SOFT KEY"
+            style_h = max(18, int(24 * scale))
+            style_w = min(rel_w - (pad * 2), max(72, int(len(style) * 7 * scale) + int(22 * scale)))
+            style_box = [pad + stripe_w, pad, pad + stripe_w + style_w, pad + style_h]
+            draw.rounded_rectangle(style_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((style_box[0] + style_box[2]) / 2.0, (style_box[1] + style_box[3]) / 2.0),
+                style,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text(
+                (rel_w - pad, pad + (style_h / 2.0)),
+                "Lighting",
+                fill=(203, 213, 225, 170),
+                anchor="rm",
+            )
+            title = str(item.get("label", "") or "").strip() or "Lighting Cue"
+            if len(title) > 28:
+                title = f"{title[:25]}..."
+            title_y = style_box[3] + max(12, int(14 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(248, 250, 252, 255))
+            source = str(item.get("source", "") or "").strip()
+            if source:
+                max_chars = max(18, min(42, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(source, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, title_y + max(18, int(24 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 220),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(44, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, rel_h - max(46, int(52 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 180),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "prop_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            state = str(item.get("prop_state", "") or "").strip().upper() or "HERO PROP"
+            state_h = max(18, int(24 * scale))
+            state_w = min(rel_w - (pad * 2), max(84, int(len(state) * 7 * scale) + int(22 * scale)))
+            state_box = [rel_w - pad - state_w, band_h + max(8, int(10 * scale)), rel_w - pad, band_h + max(8, int(10 * scale)) + state_h]
+            draw.rounded_rectangle(state_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((state_box[0] + state_box[2]) / 2.0, (state_box[1] + state_box[3]) / 2.0),
+                state,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((pad, band_h + max(14, int(18 * scale))), "PROP", fill=(100, 116, 139, 180))
+            title = str(item.get("label", "") or "").strip() or "Prop Card"
+            if len(title) > 24:
+                title = f"{title[:21]}..."
+            title_y = state_box[3] + max(12, int(14 * scale))
+            draw.text((pad, title_y), title, fill=(15, 23, 42, 255))
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(16, min(40, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(18, int(24 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "sound_cue":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(17, 24, 39, 248),
+                outline=(39, 48, 64, 255),
+                width=max(1, int(2 * scale)),
+            )
+            pad = max(12, int(16 * scale))
+            sound_type = str(item.get("sound_type", "") or "").strip().upper() or "AMBIENCE"
+            type_h = max(18, int(24 * scale))
+            type_w = min(rel_w - (pad * 2), max(76, int(len(sound_type) * 7 * scale) + int(22 * scale)))
+            type_box = [pad, pad, pad + type_w, pad + type_h]
+            draw.rounded_rectangle(type_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((type_box[0] + type_box[2]) / 2.0, (type_box[1] + type_box[3]) / 2.0),
+                sound_type,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, pad + (type_h / 2.0)), "Sound", fill=(203, 213, 225, 170), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Sound Cue"
+            if len(title) > 34:
+                title = f"{title[:31]}..."
+            title_y = type_box[3] + max(10, int(12 * scale))
+            draw.text((pad, title_y), title, fill=(248, 250, 252, 255))
+            bar_y = title_y + max(20, int(24 * scale))
+            bar_width = max(6, int(8 * scale))
+            bar_gap = max(4, int(6 * scale))
+            bar_heights = [10, 20, 14, 24, 12, 18]
+            cursor_x = pad
+            for bar_h in bar_heights:
+                height = max(6, int(bar_h * scale))
+                draw.rounded_rectangle(
+                    [cursor_x, bar_y + max(0, int(24 * scale) - height), cursor_x + bar_width, bar_y + max(0, int(24 * scale))],
+                    radius=max(3, int(4 * scale)),
+                    fill=(*accent_rgb, 240),
+                )
+                cursor_x += bar_width + bar_gap
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(48, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, bar_y + max(30, int(34 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 176),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "transition_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(12, 18, 28, 235),
+                outline=(255, 255, 255, 48),
+                width=max(1, int(2 * scale)),
+            )
+            pad = max(12, int(16 * scale))
+            transition = str(item.get("transition_type", "") or "").strip().upper() or "CUT"
+            type_h = max(18, int(24 * scale))
+            type_w = min(rel_w - (pad * 2), max(70, int(len(transition) * 7 * scale) + int(22 * scale)))
+            type_box = [int((rel_w - type_w) / 2), pad, int((rel_w + type_w) / 2), pad + type_h]
+            draw.rounded_rectangle(type_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((type_box[0] + type_box[2]) / 2.0, (type_box[1] + type_box[3]) / 2.0),
+                transition,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            arrow_y = type_box[3] + max(16, int(18 * scale))
+            arrow_x0 = int(rel_w * 0.28)
+            arrow_x1 = int(rel_w * 0.72)
+            draw.line([(arrow_x0, arrow_y), (arrow_x1, arrow_y)], fill=(226, 232, 240, 120), width=max(1, int(2 * scale)))
+            draw.line([(arrow_x1 - max(6, int(8 * scale)), arrow_y - max(6, int(8 * scale))), (arrow_x1, arrow_y)], fill=(226, 232, 240, 120), width=max(1, int(2 * scale)))
+            draw.line([(arrow_x1 - max(6, int(8 * scale)), arrow_y + max(6, int(8 * scale))), (arrow_x1, arrow_y)], fill=(226, 232, 240, 120), width=max(1, int(2 * scale)))
+            title = str(item.get("label", "") or "").strip() or "Transition Card"
+            if len(title) > 30:
+                title = f"{title[:27]}..."
+            title_y = arrow_y + max(14, int(18 * scale))
+            draw.text((rel_w / 2.0, title_y), title, fill=(248, 250, 252, 245), anchor="ma")
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(16, min(34, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (rel_w / 2.0, title_y + max(18, int(24 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 176),
+                    spacing=max(3, int(4 * scale)),
+                    anchor="ma",
+                    align="center",
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "editorial_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            rhythm = str(item.get("edit_rhythm", "") or "").strip().upper() or "HOLD"
+            rhythm_h = max(18, int(24 * scale))
+            rhythm_w = min(rel_w - (pad * 2), max(74, int(len(rhythm) * 7 * scale) + int(22 * scale)))
+            rhythm_box = [pad + stripe_w, pad, pad + stripe_w + rhythm_w, pad + rhythm_h]
+            draw.rounded_rectangle(rhythm_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((rhythm_box[0] + rhythm_box[2]) / 2.0, (rhythm_box[1] + rhythm_box[3]) / 2.0),
+                rhythm,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, pad + (rhythm_h / 2.0)), "Editorial", fill=(100, 116, 139, 255), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Editorial Card"
+            if len(title) > 32:
+                title = f"{title[:29]}..."
+            title_y = rhythm_box[3] + max(12, int(14 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(15, 23, 42, 255))
+            logic = str(item.get("cut_logic", "") or "").strip()
+            if logic:
+                max_chars = max(16, min(38, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(logic, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(16, min(38, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, rel_h - max(28, int(34 * scale))),
+                    wrapped,
+                    fill=(100, 116, 139, 216),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "production_note":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            department = str(item.get("production_department", "") or "").strip().upper() or "ART"
+            dept_h = max(18, int(24 * scale))
+            dept_w = min(rel_w - (pad * 2), max(72, int(len(department) * 7 * scale) + int(22 * scale)))
+            dept_box = [pad, band_h + max(8, int(10 * scale)), pad + dept_w, band_h + max(8, int(10 * scale)) + dept_h]
+            draw.rounded_rectangle(dept_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((dept_box[0] + dept_box[2]) / 2.0, (dept_box[1] + dept_box[3]) / 2.0),
+                department,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, band_h + max(20, int(22 * scale))), "Production", fill=(100, 116, 139, 180), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Production Note"
+            if len(title) > 28:
+                title = f"{title[:25]}..."
+            title_y = dept_box[3] + max(12, int(14 * scale))
+            draw.text((pad, title_y), title, fill=(15, 23, 42, 255))
+            status = str(item.get("status", "") or "").strip()
+            if status:
+                max_chars = max(16, min(38, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(status, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(16, min(38, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, rel_h - max(28, int(34 * scale))),
+                    wrapped,
+                    fill=(100, 116, 139, 216),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "graphics_note":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(17, 24, 39, 248),
+                outline=(39, 48, 64, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            graphic_type = str(item.get("graphic_type", "") or "").strip().upper() or "SCREEN INSERT"
+            type_h = max(18, int(24 * scale))
+            type_w = min(rel_w - (pad * 2), max(96, int(len(graphic_type) * 7 * scale) + int(22 * scale)))
+            type_box = [pad + stripe_w, pad, pad + stripe_w + type_w, pad + type_h]
+            draw.rounded_rectangle(type_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((type_box[0] + type_box[2]) / 2.0, (type_box[1] + type_box[3]) / 2.0),
+                graphic_type,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, pad + (type_h / 2.0)), "Graphics", fill=(203, 213, 225, 170), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Graphics Note"
+            if len(title) > 42:
+                title = f"{title[:39]}..."
+            title_y = type_box[3] + max(12, int(14 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(248, 250, 252, 255))
+            placement = str(item.get("placement", "") or "").strip()
+            if placement:
+                max_chars = max(20, min(54, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(placement, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 216),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(20, min(54, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, rel_h - max(36, int(42 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 178),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "grade_card":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(11, 16, 28, 246),
+                outline=(55, 65, 81, 255),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            direction = str(item.get("grade_direction", "") or "").strip().upper() or "SILVER BLUE"
+            direction_h = max(18, int(24 * scale))
+            direction_w = min(rel_w - (pad * 2), max(88, int(len(direction) * 7 * scale) + int(22 * scale)))
+            direction_box = [pad, band_h + max(8, int(10 * scale)), pad + direction_w, band_h + max(8, int(10 * scale)) + direction_h]
+            draw.rounded_rectangle(direction_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((direction_box[0] + direction_box[2]) / 2.0, (direction_box[1] + direction_box[3]) / 2.0),
+                direction,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, band_h + max(20, int(22 * scale))), "Grade", fill=(203, 213, 225, 170), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Grade Card"
+            if len(title) > 28:
+                title = f"{title[:25]}..."
+            title_y = direction_box[3] + max(12, int(14 * scale))
+            draw.text((pad, title_y), title, fill=(248, 250, 252, 255))
+            palette = str(item.get("palette_note", "") or "").strip()
+            if palette:
+                max_chars = max(16, min(36, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(palette, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(191, 219, 254, 228),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(16, min(36, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, rel_h - max(28, int(34 * scale))),
+                    wrapped,
+                    fill=(203, 213, 225, 180),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "vfx_note":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(9, 14, 24, 246),
+                outline=(255, 255, 255, 24),
+                width=max(1, int(2 * scale)),
+            )
+            band_h = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, band_h + max(4, int(6 * scale))],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            task = str(item.get("vfx_task", "") or "").strip().upper() or "CLEANUP"
+            task_h = max(18, int(24 * scale))
+            task_w = min(rel_w - (pad * 2), max(82, int(len(task) * 7 * scale) + int(22 * scale)))
+            task_box = [pad, band_h + max(8, int(10 * scale)), pad + task_w, band_h + max(8, int(10 * scale)) + task_h]
+            draw.rounded_rectangle(task_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((task_box[0] + task_box[2]) / 2.0, (task_box[1] + task_box[3]) / 2.0),
+                task,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, band_h + max(20, int(22 * scale))), "VFX", fill=(203, 213, 225, 170), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "VFX Note"
+            if len(title) > 34:
+                title = f"{title[:31]}..."
+            title_y = task_box[3] + max(12, int(14 * scale))
+            draw.text((pad, title_y), title, fill=(248, 250, 252, 255))
+            status = str(item.get("plate_status", "") or "").strip()
+            if status:
+                max_chars = max(18, min(52, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(status, width=max_chars)
+                draw.multiline_text(
+                    (pad, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(191, 219, 254, 230),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(18, min(52, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad, rel_h - max(36, int(42 * scale))),
+                    wrapped,
+                    fill=(226, 232, 240, 178),
+                    spacing=max(3, int(4 * scale)),
+                )
+            self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)
+            return
+
+        if item_type == "blocking_note":
+            item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(item_tile)
+            accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
+            draw.rounded_rectangle(
+                [0, 0, rel_w - 1, rel_h - 1],
+                radius=corner_radius,
+                fill=(248, 250, 252, 252),
+                outline=(217, 226, 236, 255),
+                width=max(1, int(2 * scale)),
+            )
+            stripe_w = max(4, int(5 * scale))
+            draw.rounded_rectangle(
+                [0, 0, stripe_w + max(3, int(4 * scale)), rel_h - 1],
+                radius=corner_radius,
+                fill=(*accent_rgb, 255),
+            )
+            pad = max(12, int(16 * scale))
+            pattern = str(item.get("blocking_pattern", "") or "").strip().upper() or "CROSS LEFT"
+            pattern_h = max(18, int(24 * scale))
+            pattern_w = min(rel_w - (pad * 2), max(88, int(len(pattern) * 7 * scale) + int(22 * scale)))
+            pattern_box = [pad + stripe_w, pad, pad + stripe_w + pattern_w, pad + pattern_h]
+            draw.rounded_rectangle(pattern_box, radius=max(8, int(12 * scale)), fill=(*accent_rgb, 255))
+            draw.text(
+                ((pattern_box[0] + pattern_box[2]) / 2.0, (pattern_box[1] + pattern_box[3]) / 2.0),
+                pattern,
+                fill=self._text_color_for_bg(accent_rgb),
+                anchor="mm",
+            )
+            draw.text((rel_w - pad, pad + (pattern_h / 2.0)), "Blocking", fill=(100, 116, 139, 255), anchor="rm")
+            title = str(item.get("label", "") or "").strip() or "Blocking Note"
+            if len(title) > 54:
+                title = f"{title[:51]}..."
+            title_y = pattern_box[3] + max(12, int(14 * scale))
+            draw.text((pad + stripe_w, title_y), title, fill=(15, 23, 42, 255))
+            staging = str(item.get("staging", "") or "").strip()
+            if staging:
+                max_chars = max(28, min(76, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(staging, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, title_y + max(18, int(22 * scale))),
+                    wrapped,
+                    fill=(71, 85, 105, 255),
+                    spacing=max(3, int(4 * scale)),
+                )
+            note = str(item.get("content", "") or "").strip()
+            if note:
+                max_chars = max(28, min(76, rel_w // max(7, int(8 * scale))))
+                wrapped = textwrap.fill(note, width=max_chars)
+                draw.multiline_text(
+                    (pad + stripe_w, rel_h - max(34, int(40 * scale))),
+                    wrapped,
+                    fill=(100, 116, 139, 216),
                     spacing=max(3, int(4 * scale)),
                 )
             self._composite_item_tile(canvas, item_tile, rel_x, rel_y, rel_w, rel_h, rotation=rotation)

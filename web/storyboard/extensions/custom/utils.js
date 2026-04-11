@@ -93,3 +93,31 @@ export function formatColorList(colors) {
         .filter(Boolean)
         .join(", ");
 }
+
+export function parseChecklistText(value) {
+    return String(value ?? "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 8)
+        .map((line) => {
+            const match = line.match(/^\[(x|X| )\]\s*(.+)$/);
+            if (match) {
+                return {
+                    done: match[1].toLowerCase() === "x",
+                    label: match[2].trim(),
+                };
+            }
+            return {
+                done: false,
+                label: line.replace(/^[-*]\s*/, "").trim(),
+            };
+        })
+        .filter((item) => item.label);
+}
+
+export function formatChecklistText(items) {
+    return (items || [])
+        .map((item) => `[${item?.done ? "x" : " "}] ${String(item?.label || "").trim()}`)
+        .join("\n");
+}

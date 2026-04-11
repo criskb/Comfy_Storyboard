@@ -42,11 +42,17 @@ export const moodTagStoryboardExtension = {
             body = document.createElement("div");
             body.className = "mood-tag-body";
             body.innerHTML = `
+                <div class="mood-tag-hit-area" aria-hidden="true"></div>
                 <div class="mood-tag-kicker">Mood</div>
                 <div class="mood-tag-label"></div>
                 <div class="mood-tag-note"></div>
             `;
             element.appendChild(body);
+        }
+
+        const hitArea = body.querySelector(".mood-tag-hit-area");
+        if (hitArea) {
+            hitArea.onmousedown = (event) => workspace.beginItemDrag(item.id, event);
         }
 
         body.querySelector(".mood-tag-label").innerText = (item.label || "Mood Tag").trim();
