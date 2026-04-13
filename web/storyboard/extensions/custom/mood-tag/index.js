@@ -36,24 +36,21 @@ export const moodTagStoryboardExtension = {
     updateItemContent({ workspace, element, item }) {
         element.classList.add("mood-tag-item");
         applyAccentVariables(workspace, element, item);
+        element.querySelector(".mood-tag-hit-area")?.remove();
 
         let body = element.querySelector(".mood-tag-body");
         if (!body) {
             body = document.createElement("div");
             body.className = "mood-tag-body";
             body.innerHTML = `
-                <div class="mood-tag-hit-area" aria-hidden="true"></div>
                 <div class="mood-tag-kicker">Mood</div>
                 <div class="mood-tag-label"></div>
                 <div class="mood-tag-note"></div>
             `;
             element.appendChild(body);
         }
-
-        const hitArea = body.querySelector(".mood-tag-hit-area");
-        if (hitArea) {
-            hitArea.onmousedown = (event) => workspace.beginItemDrag(item.id, event);
-        }
+        item.pinned = false;
+        item.__custom_drag_migrated = true;
 
         body.querySelector(".mood-tag-label").innerText = (item.label || "Mood Tag").trim();
         const note = body.querySelector(".mood-tag-note");

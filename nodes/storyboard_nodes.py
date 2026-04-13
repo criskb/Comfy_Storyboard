@@ -39,12 +39,12 @@ class Storyboard:
         }
 
     RETURN_TYPES = (
-        "IMAGE", "IMAGE", "MASK", "JSON", "STORYBOARD_MANIFEST", "IMAGE", "CONDITIONING",
+        "IMAGE", "IMAGE", "MASK", "JSON", "STORYBOARD_MANIFEST", "IMAGE", "CONDITIONING", "STRING",
         "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE",
         "STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING",
     )
     RETURN_NAMES = (
-        "selected_image", "selected_batch", "selected_mask", "selected_meta", "board_manifest", "board_preview", "conditioning",
+        "selected_image", "selected_batch", "selected_mask", "selected_meta", "board_manifest", "board_preview", "conditioning", "prompt_text",
         "ref_1", "ref_2", "ref_3", "ref_4", "ref_5", "ref_6", "ref_7", "ref_8",
         "ref_video_1", "ref_video_2", "ref_video_3", "ref_video_4", "ref_video_5", "ref_video_6", "ref_video_7", "ref_video_8",
     )
@@ -139,7 +139,7 @@ class Storyboard:
             if image_tensor is not None:
                 refs[ref_idx - 1] = image_tensor
 
-        return (selected_image, selected_batch, selected_mask, selected_meta, board_data, board_preview, conditioning, *refs, *ref_videos)
+        return (selected_image, selected_batch, selected_mask, selected_meta, board_data, board_preview, conditioning, prompt or "", *refs, *ref_videos)
 
 class StoryboardSend:
     @classmethod

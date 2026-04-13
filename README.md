@@ -17,6 +17,16 @@ A PureRef-inspired storyboard and reference board for ComfyUI. This extension pr
     - **Notes**: Add sticky notes for context and planning.
     - **Z-Order**: Bring items to front or send to back.
     - **Inspector**: Edit labels and tags for any item.
+    - **Collections**: Save a multi-item selection as a named collection, then reselect, append, focus, rename, or refresh it later from the inspector.
+- **Visibility + Locking**:
+    - **Hide / Reveal**: Hide clutter temporarily, then reveal hidden items from the canvas `Actions` list or by collection.
+    - **Lock / Unlock**: Freeze important items so they stay visible but cannot be moved, resized, cropped, or accidentally deleted.
+- **Selection Tools**: Drag a marquee over the canvas to box-select items, then duplicate them in place for faster board building.
+    - **History**: Undo and redo structural board edits from the header or with standard desktop shortcuts.
+- **Portable Boards**:
+    - **Copy Boards**: Duplicate an entire storyboard, including its local assets, before exploring a new direction.
+    - **Export Packages**: Save a board as a portable `.storyboard.json` package with referenced images and videos embedded.
+    - **Import Packages**: Restore packaged boards into a new board ID on another machine or project.
 
 ## Nodes
 
@@ -53,6 +63,16 @@ Creates named empty placeholders in the board.
 4. Use **Storyboard Send** in your generation pipe to target your board items.
 5. Use **Storyboard Read** to feed board items into other nodes.
 
+You can duplicate a board from the header, and use the canvas right-click `Actions` list to export a portable package or import a previously exported package.
+The inspector now doubles as a lightweight collections manager, and the board remembers its last viewport so reopening a board brings you back to the same working area.
+You can also use `Cmd/Ctrl+A` to select everything, `Cmd/Ctrl+D` to duplicate the current selection, and the standard copy/paste shortcuts to duplicate richer item payloads safely.
+Undo uses `Cmd/Ctrl+Z`, and redo uses `Shift+Cmd/Ctrl+Z` or `Cmd/Ctrl+Y`.
+Visible board items can now be hidden or locked directly from the inspector, multi-select tools, or collections, and hidden items can be revealed again from the canvas `Actions` menu without rebuilding the board.
+Board import/export and hidden-item recovery are also available from the canvas right-click `Actions` list, and the main Storyboard node now outputs the raw `prompt_text` string alongside `conditioning`.
+Image and video cards now stay dormant when they are far off-screen, then wake up shortly before they enter view so dense boards stay smoother without losing the board layout.
+
 ---
 
 ![ComfyUI Storyboard Signature](assets/storyboard_sig_icon.svg)
+
+This extension/addon was created using Codex skill designed by Cris K B https://github.com/criskb/comfyui-node-extension-builder

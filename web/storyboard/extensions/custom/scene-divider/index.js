@@ -36,24 +36,21 @@ export const sceneDividerStoryboardExtension = {
     updateItemContent({ workspace, element, item }) {
         element.classList.add("scene-divider-item");
         applyAccentVariables(workspace, element, item);
+        element.querySelector(".scene-divider-hit-area")?.remove();
 
         let body = element.querySelector(".scene-divider-body");
         if (!body) {
             body = document.createElement("div");
             body.className = "scene-divider-body";
             body.innerHTML = `
-                <div class="scene-divider-hit-area" aria-hidden="true"></div>
-                <div class="scene-divider-line"></div>
                 <div class="scene-divider-pill"></div>
                 <div class="scene-divider-subtitle"></div>
+                <div class="scene-divider-line"></div>
             `;
             element.appendChild(body);
         }
-
-        const hitArea = body.querySelector(".scene-divider-hit-area");
-        if (hitArea) {
-            hitArea.onmousedown = (event) => workspace.beginItemDrag(item.id, event);
-        }
+        item.pinned = false;
+        item.__custom_drag_migrated = true;
 
         body.querySelector(".scene-divider-pill").innerText = (item.label || "Scene Divider").trim();
         const subtitle = body.querySelector(".scene-divider-subtitle");

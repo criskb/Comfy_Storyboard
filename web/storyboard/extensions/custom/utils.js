@@ -44,6 +44,45 @@ export function refreshCustomItem(workspace, item) {
     if (element) workspace.updateItemContent(element, item, false);
 }
 
+export function attachDirectItemDrag(workspace, item, element, options = {}) {
+    const { selector = null, clearLegacyPinned = false } = options;
+    const dragTarget = selector ? element.querySelector(selector) : element;
+    if (!dragTarget) return null;
+    let pointerDragActive = false;
+
+    const beginDrag = (event) => {
+        if (typeof event.button === "number" && event.button !== 0) return;
+        if (clearLegacyPinned && item.__custom_drag_migrated !== true) {
+            item.pinned = false;
+            item.__custom_drag_migrated = true;
+        }
+        workspace.beginItemDrag(item.id, event);
+    };
+
+    dragTarget.style.cursor = item.pinned ? "default" : "grab";
+    dragTarget.onpointerdown = null;
+    dragTarget.onmousedown = null;
+    if (typeof window !== "undefined" && "PointerEvent" in window) {
+        dragTarget.onpointerdown = (event) => {
+            pointerDragActive = true;
+            beginDrag(event);
+        };
+        dragTarget.onpointerup = () => {
+            pointerDragActive = false;
+        };
+        dragTarget.onpointercancel = () => {
+            pointerDragActive = false;
+        };
+        dragTarget.onmousedown = (event) => {
+            if (pointerDragActive) return;
+            beginDrag(event);
+        };
+    } else {
+        dragTarget.onmousedown = beginDrag;
+    }
+    return dragTarget;
+}
+
 export function bindValueField(id, handlers = {}) {
     const input = document.getElementById(id);
     if (!input) return null;

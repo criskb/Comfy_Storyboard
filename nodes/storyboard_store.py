@@ -8,7 +8,19 @@ from PIL import Image, ImageDraw
 import numpy as np
 import torch
 
+from .storyboard_groups import normalize_storyboard_groups
+from .storyboard_items import normalize_storyboard_items, normalize_storyboard_selection
 from .storyboard_media_utils import apply_normalized_crop
+from .storyboard_package import (
+    build_storyboard_package,
+    clone_board_payload,
+    iter_board_asset_names,
+    normalize_board_selection,
+    parse_storyboard_package,
+    remap_item_asset_references,
+    safe_asset_name,
+    write_package_assets,
+)
 
 DEFAULT_FRAME_COLOR = "#ffffff"
 DEFAULT_FRAME_RGB = (255, 255, 255)
@@ -34,28 +46,35 @@ class StoryboardStore:
     def _get_assets_path(self, board_id):
         return os.path.join(self._get_board_path(board_id), "assets")
 
+    def _normalize_board_data(self, board_data):
+        board = board_data if isinstance(board_data, dict) else {}
+        board.setdefault("board_id", str(uuid.uuid4()))
+        board.setdefault("version", 1)
+        board.setdefault("viewport", {"x": 0, "y": 0, "zoom": 1})
+        board.setdefault("items", [])
+        board.setdefault("groups", [])
+        board.setdefault("selection", [])
+        board["settings"] = {
+            **DEFAULT_BOARD_SETTINGS,
+            **(board.get("settings") or {}),
+        }
+        normalize_storyboard_items(board["items"])
+
+        board["selection"] = normalize_storyboard_selection(board.get("selection", []), board.get("items", []))
+        board["groups"] = normalize_storyboard_groups(board.get("groups"), board.get("items"))
+        return board
+
     def get_board(self, board_id):
         board_path = self._get_board_path(board_id)
         json_path = os.path.join(board_path, "board.json")
         
         if not os.path.exists(json_path):
-            return {
+            return self._normalize_board_data({
                 "board_id": board_id,
-                "version": 1,
-                "viewport": {"x": 0, "y": 0, "zoom": 1},
-                "items": [],
-                "groups": [],
-                "selection": [],
-                "settings": dict(DEFAULT_BOARD_SETTINGS)
-            }
+            })
         
         with open(json_path, 'r') as f:
-            board = json.load(f)
-            board["settings"] = {
-                **DEFAULT_BOARD_SETTINGS,
-                **(board.get("settings") or {}),
-            }
-            return board
+            return self._normalize_board_data(json.load(f))
 
     def save_board(self, board_data, notify=True):
         board_id = board_data.get("board_id")
@@ -63,10 +82,7 @@ class StoryboardStore:
             board_id = str(uuid.uuid4())
             board_data["board_id"] = board_id
 
-        board_data["settings"] = {
-            **DEFAULT_BOARD_SETTINGS,
-            **(board_data.get("settings") or {}),
-        }
+        self._normalize_board_data(board_data)
 
         board_path = self._get_board_path(board_id)
         if not os.path.exists(board_path):
@@ -137,6 +153,83 @@ class StoryboardStore:
             return True
         return False
 
+    def duplicate_board(self, board_id, new_id, notify=True):
+        source_id = str(board_id or "").strip()
+        target_id = str(new_id or "").strip()
+        if not source_id or not target_id or source_id == target_id:
+            return False
+
+        source_path = self._get_board_path(source_id)
+        target_path = self._get_board_path(target_id)
+        if os.path.exists(target_path):
+            return False
+
+        if not os.path.exists(source_path):
+            self.save_board(self.get_board(source_id), notify=False)
+
+        if not os.path.exists(source_path):
+            return False
+
+        shutil.copytree(source_path, target_path)
+        duplicated_board = self.get_board(target_id)
+        duplicated_board["board_id"] = target_id
+        self.save_board(duplicated_board, notify=notify)
+        return True
+
+    def get_selected_items(self, board_id):
+        board_data = self.get_board(board_id)
+        items_by_id = {
+            item.get("id"): item
+            for item in board_data.get("items", [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        return [
+            items_by_id[item_id]
+            for item_id in board_data.get("selection", [])
+            if item_id in items_by_id
+        ]
+
+    def export_board_package(self, board_id, item_ids=None):
+        board_data = clone_board_payload(self.get_board(board_id))
+        if item_ids is not None:
+            wanted_ids = {item_id for item_id in item_ids if item_id}
+            board_data["items"] = [
+                item
+                for item in board_data.get("items", [])
+                if item.get("id") in wanted_ids
+            ]
+
+        normalize_board_selection(board_data)
+        return build_storyboard_package(board_data, self._get_assets_path(board_id))
+
+    def import_board_package(self, package_data, board_id=None, notify=True):
+        board_payload, assets_payload = parse_storyboard_package(package_data)
+
+        target_board_id = str(board_id or board_payload.get("board_id") or "").strip() or str(uuid.uuid4())
+        target_path = self._get_board_path(target_board_id)
+        if os.path.exists(target_path):
+            raise ValueError(f"Storyboard '{target_board_id}' already exists.")
+
+        assets_path = self._get_assets_path(target_board_id)
+        asset_name_map = write_package_assets(assets_payload, assets_path)
+        board_payload["board_id"] = target_board_id
+        missing_assets = remap_item_asset_references(board_payload.get("items", []), asset_name_map)
+        normalize_board_selection(board_payload)
+        self.save_board(board_payload, notify=notify)
+
+        unresolved_assets = [
+            asset_name
+            for asset_name in iter_board_asset_names(board_payload.get("items", []))
+            if not os.path.isfile(os.path.join(assets_path, safe_asset_name(asset_name)))
+        ]
+
+        return {
+            "board_id": target_board_id,
+            "item_count": len(board_payload.get("items", [])),
+            "asset_count": len(asset_name_map),
+            "missing_assets": sorted(set(missing_assets + unresolved_assets)),
+        }
+
     def _sorted_render_items(self, items):
         order = {id(item): index for index, item in enumerate(items)}
         return sorted(items, key=lambda item: (item.get("type") != "frame", order.get(id(item), 0)))
@@ -170,6 +263,49 @@ class StoryboardStore:
         mask_draw = ImageDraw.Draw(mask)
         mask_draw.rounded_rectangle([0, 0, width, height], radius=radius, fill=255)
         return mask
+
+    def _safe_box(self, xy, max_w=None, max_h=None):
+        if not isinstance(xy, (list, tuple)) or len(xy) != 4:
+            return xy
+
+        x0, y0, x1, y1 = [int(round(value)) for value in xy]
+        if max_w is not None:
+            max_x = max(0, int(max_w) - 1)
+            x0 = max(0, min(x0, max_x))
+            x1 = max(x0, min(x1, max_x))
+        elif x1 < x0:
+            x1 = x0
+
+        if max_h is not None:
+            max_y = max(0, int(max_h) - 1)
+            y0 = max(0, min(y0, max_y))
+            y1 = max(y0, min(y1, max_y))
+        elif y1 < y0:
+            y1 = y0
+
+        return [x0, y0, x1, y1]
+
+    def _safe_image_draw(self, image):
+        draw = ImageDraw.Draw(image)
+        max_w, max_h = image.size
+        original_rectangle = draw.rectangle
+        original_rounded_rectangle = draw.rounded_rectangle
+
+        def safe_rectangle(xy, *args, **kwargs):
+            return original_rectangle(self._safe_box(xy, max_w=max_w, max_h=max_h), *args, **kwargs)
+
+        def safe_rounded_rectangle(xy, *args, **kwargs):
+            safe_xy = self._safe_box(xy, max_w=max_w, max_h=max_h)
+            max_radius = max(0, min((safe_xy[2] - safe_xy[0]) // 2, (safe_xy[3] - safe_xy[1]) // 2))
+            if args:
+                args = (min(int(args[0]), max_radius), *args[1:])
+            elif "radius" in kwargs:
+                kwargs["radius"] = min(int(kwargs["radius"]), max_radius)
+            return original_rounded_rectangle(safe_xy, *args, **kwargs)
+
+        draw.rectangle = safe_rectangle
+        draw.rounded_rectangle = safe_rounded_rectangle
+        return draw
 
     def _item_rotation(self, item):
         try:
@@ -328,7 +464,7 @@ class StoryboardStore:
                 img = img.resize((media_w, media_h), Image.Resampling.LANCZOS)
                 mask = self._rounded_mask(media_w, media_h, layout["media_radius"])
                 item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-                draw = ImageDraw.Draw(item_tile)
+                draw = self._safe_image_draw(item_tile)
                 if presentation == "polaroid":
                     draw.rounded_rectangle(
                         [0, 0, rel_w - 1, rel_h - 1],
@@ -351,7 +487,7 @@ class StoryboardStore:
 
         if item_type == "video" and item.get("video_ref"):
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             presentation = self._media_presentation(item)
             layout = self._media_layout(rel_w, rel_h, presentation, scale=scale)
             media_x0, media_y0, media_x1, media_y1 = layout["media_box"]
@@ -367,7 +503,7 @@ class StoryboardStore:
             mask = self._rounded_mask(media_w, media_h, layout["media_radius"])
             video_img = Image.new("RGBA", (media_w, media_h), (36, 36, 40, 255))
             item_tile.paste(video_img, (media_x0, media_y0), mask)
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             icon_size = max(10, int(min(media_w, media_h) * 0.22))
             center_x = media_x0 + (media_w // 2)
             center_y = media_y0 + (media_h // 2)
@@ -406,7 +542,7 @@ class StoryboardStore:
             item_tile.paste(note_img, (0, 0), mask)
             content = (item.get("content") or "").strip()
             if content:
-                draw = ImageDraw.Draw(item_tile)
+                draw = self._safe_image_draw(item_tile)
                 max_chars = max(10, min(42, rel_w // max(8, int(8 * scale))))
                 wrapped = textwrap.fill(content, width=max_chars)
                 draw.multiline_text(
@@ -423,7 +559,7 @@ class StoryboardStore:
             mask = self._rounded_mask(rel_w, rel_h, corner_radius)
             slot_img = Image.new("RGBA", (rel_w, rel_h), (26, 26, 26, 255))
             item_tile.paste(slot_img, (0, 0), mask)
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             draw.text(
                 (rel_w / 2, rel_h / 2),
                 item.get("label", "Slot"),
@@ -435,7 +571,7 @@ class StoryboardStore:
 
         if item_type == "mood_tag":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             mask = self._rounded_mask(rel_w, rel_h, corner_radius)
             mood_img = Image.new("RGBA", (rel_w, rel_h), (15, 23, 42, 240))
@@ -472,7 +608,7 @@ class StoryboardStore:
 
         if item_type == "shot_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -527,7 +663,7 @@ class StoryboardStore:
 
         if item_type == "story_beat":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -574,7 +710,7 @@ class StoryboardStore:
 
         if item_type == "swatch_strip":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
                 radius=corner_radius,
@@ -622,7 +758,7 @@ class StoryboardStore:
 
         if item_type == "scene_divider":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             center_y = max(14, int(rel_h * 0.34))
             draw.line(
@@ -663,7 +799,7 @@ class StoryboardStore:
 
         if item_type == "character_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -725,7 +861,7 @@ class StoryboardStore:
 
         if item_type == "location_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -778,7 +914,7 @@ class StoryboardStore:
 
         if item_type == "prompt_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -825,7 +961,7 @@ class StoryboardStore:
 
         if item_type == "checklist_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -893,7 +1029,7 @@ class StoryboardStore:
 
         if item_type == "reference_basket":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -950,7 +1086,7 @@ class StoryboardStore:
 
         if item_type == "lens_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1011,7 +1147,7 @@ class StoryboardStore:
 
         if item_type == "wardrobe_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1076,7 +1212,7 @@ class StoryboardStore:
 
         if item_type == "set_dressing_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1134,7 +1270,7 @@ class StoryboardStore:
 
         if item_type == "dialogue_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1182,7 +1318,7 @@ class StoryboardStore:
 
         if item_type == "hair_makeup_note":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1240,7 +1376,7 @@ class StoryboardStore:
 
         if item_type == "stunt_note":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1298,7 +1434,7 @@ class StoryboardStore:
 
         if item_type == "camera_move":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1364,7 +1500,7 @@ class StoryboardStore:
 
         if item_type == "continuity_note":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1422,7 +1558,7 @@ class StoryboardStore:
 
         if item_type == "lighting_cue":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1485,7 +1621,7 @@ class StoryboardStore:
 
         if item_type == "prop_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1533,7 +1669,7 @@ class StoryboardStore:
 
         if item_type == "sound_cue":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1588,7 +1724,7 @@ class StoryboardStore:
 
         if item_type == "transition_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1637,7 +1773,7 @@ class StoryboardStore:
 
         if item_type == "editorial_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1695,7 +1831,7 @@ class StoryboardStore:
 
         if item_type == "production_note":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1753,7 +1889,7 @@ class StoryboardStore:
 
         if item_type == "graphics_note":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1811,7 +1947,7 @@ class StoryboardStore:
 
         if item_type == "grade_card":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1869,7 +2005,7 @@ class StoryboardStore:
 
         if item_type == "vfx_note":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1927,7 +2063,7 @@ class StoryboardStore:
 
         if item_type == "blocking_note":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             accent_rgb = self._hex_to_rgb(item.get("accent", "#ffffff"))
             draw.rounded_rectangle(
                 [0, 0, rel_w - 1, rel_h - 1],
@@ -1985,7 +2121,7 @@ class StoryboardStore:
 
         if item_type == "frame":
             item_tile = Image.new("RGBA", (rel_w, rel_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(item_tile)
+            draw = self._safe_image_draw(item_tile)
             rgb = self._hex_to_rgb(item.get("color", DEFAULT_FRAME_COLOR))
             presentation = self._frame_presentation(item)
             scene_code, title, subtitle = self._frame_header_meta(item)
@@ -2149,7 +2285,7 @@ class StoryboardStore:
         canvas_w = int(frame["w"] * scale)
         canvas_h = int(frame["h"] * scale)
         canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(canvas)
+        draw = self._safe_image_draw(canvas)
 
         # Draw frame background
         bg_color = frame.get("color", DEFAULT_FRAME_COLOR)
@@ -2269,7 +2405,7 @@ class StoryboardStore:
         swatch_w = 160
         swatch_h = 52
         palette_img = Image.new("RGB", (swatch_w, max(1, len(hex_colors)) * swatch_h), (20, 20, 20))
-        draw = ImageDraw.Draw(palette_img)
+        draw = self._safe_image_draw(palette_img)
 
         for idx, hex_color in enumerate(hex_colors):
             y0 = idx * swatch_h

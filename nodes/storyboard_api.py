@@ -23,6 +23,13 @@ class StoryboardAPI:
             success = store.delete_board(board_id)
             return web.json_response({"status": "ok" if success else "error"})
 
+        @server.routes.post("/mkr/storyboard/{board_id}/duplicate/{new_id}")
+        async def duplicate_board(request):
+            board_id = request.match_info["board_id"]
+            new_id = request.match_info["new_id"]
+            success = store.duplicate_board(board_id, new_id)
+            return web.json_response({"status": "ok" if success else "error"})
+
         @server.routes.post("/mkr/storyboard/{old_id}/rename/{new_id}")
         async def rename_board(request):
             old_id = request.match_info["old_id"]
@@ -82,20 +89,51 @@ class StoryboardAPI:
         async def select_items(request):
             board_id = request.match_info["board_id"]
             data = await request.json()
-            # Logic to update selection state
-            return web.json_response({"status": "ok"})
+            board_data = store.get_board(board_id)
+            requested_selection = data.get("selection") or data.get("item_ids") or []
+            valid_ids = {
+                item.get("id")
+                for item in board_data.get("items", [])
+                if isinstance(item, dict) and item.get("id")
+            }
+            board_data["selection"] = [
+                item_id
+                for item_id in requested_selection
+                if item_id in valid_ids
+            ]
+            store.save_board(board_data, notify=bool(data.get("notify", False)))
+            return web.json_response({"status": "ok", "selection": board_data["selection"]})
 
         @server.routes.get("/mkr/storyboard/{board_id}/export")
         async def export_board(request):
             board_id = request.match_info["board_id"]
-            # Logic to export the board as a single image or manifest
-            return web.json_response({"status": "ok"})
+            selection_only = str(request.query.get("selection_only", "")).lower() in {"1", "true", "yes"}
+            item_ids = None
+            if selection_only:
+                item_ids = store.get_board(board_id).get("selection", [])
+            package = store.export_board_package(board_id, item_ids=item_ids)
+            return web.json_response(package)
 
         @server.routes.get("/mkr/storyboard/{board_id}/selected")
         async def get_selected(request):
             board_id = request.match_info["board_id"]
-            # Logic to get currently selected items/data
-            return web.json_response({"items": []})
+            items = store.get_selected_items(board_id)
+            return web.json_response({
+                "board_id": board_id,
+                "selection": [item.get("id") for item in items if item.get("id")],
+                "items": items,
+            })
+
+        @server.routes.post("/mkr/storyboard/import")
+        async def import_board(request):
+            payload = await request.json()
+            package_data = payload.get("package") if isinstance(payload, dict) and "package" in payload else payload
+            board_id = payload.get("board_id") if isinstance(payload, dict) else None
+            try:
+                result = store.import_board_package(package_data, board_id=board_id)
+            except ValueError as exc:
+                return web.json_response({"status": "error", "error": str(exc)}, status=400)
+            return web.json_response({"status": "ok", **result})
 
         @server.routes.post("/mkr/storyboard/{board_id}/upload")
         async def upload_asset(request):

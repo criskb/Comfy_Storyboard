@@ -22,14 +22,23 @@ The main Storyboard workspace node opens the board UI and exposes the board stat
 - `board_manifest`: Full board data for downstream nodes.
 - `board_preview`: Flattened preview image of the current board.
 - `conditioning`: Prompt conditioning generated from `prompt` and `clip`.
+- `prompt_text`: Raw prompt string passed into the node.
 - `ref_1` to `ref_8`: Image references taken from items assigned to reference slots.
 - `ref_video_1` to `ref_video_8`: Video file paths for referenced video items.
 
 ## Tips
 
 - Use multiple `board_id` values to keep separate storyboards for different scenes or projects.
+- Use the board header actions to duplicate a board before trying a new layout pass, and use the canvas right-click `Actions` list to import/export `.storyboard.json` packages or reveal hidden items when you want to recover the board state without cluttering the top bar.
+- Save multi-item selections as named collections from the inspector when you want reusable board clusters you can reselect, append, focus, refresh, hide, show, lock, or unlock later.
+- Drag on empty canvas space to marquee-select items, then use `Cmd/Ctrl+D` to duplicate the selection or `Cmd/Ctrl+A` to grab the full board quickly.
+- Use the header `Undo` / `Redo` controls or `Cmd/Ctrl+Z` and `Shift+Cmd/Ctrl+Z` to reverse structural board edits without losing your current viewport.
+- Hide items when you want a cleaner working board, then use `Reveal Hidden` in the canvas `Actions` list or collection controls to bring them back.
+- Lock items when you need them to stay visible but protected from drag, resize, crop, slot import, duplicate, and delete actions.
+- Image and video items now stay dormant when they are well outside the viewport, then wake up as they get close so large boards avoid paying the full media rendering cost all at once.
 - Frame items can be read as flattened images, which makes them useful as moodboard outputs.
 - The node does not need to stay visible on screen after the board is created; the saved board state lives in the manifest.
+- The board now restores its last saved viewport, which makes it easier to reopen dense boards exactly where you left off.
 - Multi-select references and use `Scatter as Moodboard` for a looser collage composition, then `Frame Selection` to turn the result into a reusable board section.
 - Use `Arrange as Story Strip` when you want a cleaner sequential storyboard read, or `Stack as Pile` when you want references to feel more like an overlapping moodboard cluster.
 - Selected frames can now switch between rigid grid, loose moodboard scatter, storyboard strip, and stacked pile layouts without rebuilding the section by hand.

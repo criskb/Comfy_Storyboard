@@ -3,6 +3,7 @@ import { api } from "../../scripts/api.js";
 import { createImageItem, createVideoItem } from "./storyboard_item_utils.js";
 import { copyTextToClipboard } from "./storyboard_clipboard.js";
 import { DEFAULT_FRAME_COLOR } from "./storyboard/design_system.js";
+import { shouldCaptureStoryboardDragEvent } from "./storyboard/drag_guard.js";
 import {
     getGridOverlayStyles,
     snapPointToGrid,
@@ -10,12 +11,57 @@ import {
 } from "./storyboard/grid.js";
 import { normalizeStoryboardSettings, snapValueToGrid } from "./storyboard/settings.js";
 import {
+    createStoryboardCollection,
+    getStoryboardCollectionItems,
+    normalizeStoryboardCollections,
+    storyboardCollectionMatchesSelection,
+} from "./storyboard/collections.js";
+import {
+    createStoryboardHistorySignature,
+    createStoryboardHistorySnapshot,
+    parseStoryboardHistorySnapshot,
+    pushStoryboardHistoryEntry,
+} from "./storyboard/history.js";
+import {
+    STORYBOARD_MEDIA_ACTIVATION_BATCH_SIZE,
+    STORYBOARD_MEDIA_PREWARM_MARGIN_PX,
+    getStoryboardMediaActivationRect,
+    getStoryboardMediaViewportDistance,
+    getStoryboardViewportWorldRect,
+    shouldActivateStoryboardMedia,
+} from "./storyboard/media_virtualization.js";
+import {
+    filterStoryboardSelectionIds,
+    getStoryboardHiddenItems,
+    getStoryboardLockedItems,
+    getStoryboardVisibleItems,
+    isStoryboardItemEditable,
+    isStoryboardItemHidden,
+    isStoryboardItemLocked,
+    normalizeStoryboardItemState,
+    normalizeStoryboardItems,
+} from "./storyboard/item_state.js";
+import {
+    cloneStoryboardItemsForPaste,
+    getItemIdsIntersectingWorldRect,
+    itemIntersectsWorldRect,
+    normalizePixelRect,
+    pixelRectExceedsThreshold,
+    pixelRectToWorldRect,
+} from "./storyboard/selection_utils.js";
+import {
     isStoryboardCoreExtension,
     loadStoryboardExtensionFavorites,
     matchesStoryboardExtensionQuery,
     saveStoryboardExtensionFavorites,
     STORYBOARD_MAX_PINNED_EXTENSIONS,
 } from "./storyboard/extension_picker.js";
+import {
+    createStoryboardPackageFilename,
+    downloadStoryboardJsonFile,
+    sanitizeStoryboardBoardName,
+    suggestStoryboardImportName,
+} from "./storyboard/board_portability.js";
 import { createStoryboardExtensionRegistry } from "./storyboard/extensions/registry.js";
 import { coreStoryboardExtensions } from "./storyboard/extensions/core/index.js";
 import { customStoryboardExtensions } from "./storyboard/extensions/custom/index.js";
@@ -45,6 +91,15 @@ import {
     setFramePresentation as setStoryboardFramePresentation,
     setMediaPresentation as setStoryboardMediaPresentation,
 } from "./storyboard_surface_utils.js";
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
 
 const TOOLBAR_ICONS = {
     slot: `
@@ -82,6 +137,18 @@ const TOOLBAR_ICONS = {
         <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3.2"></circle>
             <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a2 2 0 0 1-4 0v-.1a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a2 2 0 0 1 0-4h.1a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a2 2 0 0 1 4 0v.1a1 1 0 0 0 .6.9h.1a1 1 0 0 0 1.1-.2l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6H20a2 2 0 0 1 0 4h-.1a1 1 0 0 0-.9.6Z"></path>
+        </svg>
+    `,
+    undo: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 7H4v5"></path>
+            <path d="M4 12c1.8-3.8 5-6 9-6 4.7 0 8 3.3 8 8"></path>
+        </svg>
+    `,
+    redo: `
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 7h5v5"></path>
+            <path d="M20 12c-1.8-3.8-5-6-9-6-4.7 0-8 3.3-8 8"></path>
         </svg>
     `,
     themeSystem: `
@@ -346,6 +413,8 @@ const TOOLBAR_ICONS = {
     `,
 };
 
+const STORYBOARD_ITEM_INTERACTION_VERSION = "2026-04-11-drag-refresh";
+
 // Load CSS
 const link = document.createElement("link");
 link.rel = "stylesheet";
@@ -401,17 +470,61 @@ class StoryboardWorkspace {
         this.scale = 1;
         this.offset = { x: 0, y: 0 };
         this.itemElements = new Map();
+        this.minimapItemElements = new Map();
+        this.itemLookup = new Map();
+        this.visibleItemsCache = [];
+        this.hiddenItemsCache = [];
+        this.lockedItemsCache = [];
+        this.worldBoundsBaseCache = null;
         this.isInteracting = false;
+        this.mediaLoadQueue = [];
+        this.mediaLoadsInFlight = new Set();
+        this.mediaUnloadTimers = new Map();
+        this.mediaPrewarmQueue = [];
+        this.mediaPrewarmsInFlight = new Set();
+        this.mediaPrewarmedSrcs = new Set();
+        this.maxConcurrentMediaLoads = 8;
+        this.maxConcurrentMediaPrewarms = 4;
+        this.mediaDeactivationHoldUntil = 0;
+        this.mediaDeactivationTimer = null;
         this.paletteCache = new Map(); // frameId -> colors[]
         this.paletteLoading = new Set(); // frameIds currently fetching
         this.internalClipboard = [];
         this.needsReload = false;
+        this.viewportSaveTimer = null;
+        this.selectionPreviewIds = null;
+        this.historyUndoStack = [];
+        this.historyRedoStack = [];
+        this.historySnapshot = null;
+        this.historySignature = null;
+        this.isApplyingHistory = false;
         this.inspectorOpen = false;
         this.settingsOpen = false;
         this.extensionPickerOpen = false;
         this.extensionPickerStatus = "";
+        this.chromeVisibilitySignature = "";
+        this.inspectorRenderSignature = "";
+        this.settingsPanelSignature = "";
+        this.mediaActivationFrame = null;
+        this.minimapFrame = null;
         this.createWindow();
         this.refreshFontOptions();
+        this.handleStoryboardGlobalDragCapture = (event) => {
+            if (!shouldCaptureStoryboardDragEvent(event, this.overlay, this.overlay?.style?.display === "flex")) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === "function") {
+                event.stopImmediatePropagation();
+            }
+            if (event.type === "dragover" && event.dataTransfer) {
+                event.dataTransfer.dropEffect = "copy";
+            }
+        };
+        ["dragenter", "dragover", "drop"].forEach((eventName) => {
+            window.addEventListener(eventName, this.handleStoryboardGlobalDragCapture, true);
+        });
 
         // Global shortcuts
         window.addEventListener("keydown", (e) => {
@@ -432,10 +545,24 @@ class StoryboardWorkspace {
                     if (this.boardData.selection.length > 0) {
                         this.removeSelectedItems();
                     }
+                } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+                    e.preventDefault();
+                    void this.undoHistory();
+                } else if (((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "z") || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y")) {
+                    e.preventDefault();
+                    void this.redoHistory();
                 } else if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+                    e.preventDefault();
                     this.handleCopy();
                 } else if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+                    e.preventDefault();
                     this.handlePaste();
+                } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+                    e.preventDefault();
+                    this.selectAllItems();
+                } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+                    e.preventDefault();
+                    this.duplicateSelectedItems();
                 }
             }
         });
@@ -759,8 +886,15 @@ class StoryboardWorkspace {
             <div class="storyboard-header-left">
                 <span>Storyboard:</span>
                 <select id="storyboard-selector"></select>
-                <button id="storyboard-refresh-board" class="board-action-btn" title="Refresh Board">⟳ Refresh</button>
+                <button id="storyboard-refresh-board" class="board-action-btn board-icon-btn" title="Refresh Board" aria-label="Refresh Board">⟳</button>
                 <button id="storyboard-new-board" class="board-action-btn" title="New Board">＋ New</button>
+                <button id="storyboard-undo" class="board-action-btn board-icon-btn" title="Undo" aria-label="Undo">
+                    <span class="toolbar-glyph">${TOOLBAR_ICONS.undo}</span>
+                </button>
+                <button id="storyboard-redo" class="board-action-btn board-icon-btn" title="Redo" aria-label="Redo">
+                    <span class="toolbar-glyph">${TOOLBAR_ICONS.redo}</span>
+                </button>
+                <button id="storyboard-duplicate-board" class="board-action-btn" title="Duplicate Board">⧉ Copy</button>
                 <button id="storyboard-rename-board" class="board-action-btn" title="Rename Board">✎ Rename</button>
                 <button id="storyboard-delete-board" class="board-action-btn danger" title="Delete Board">
                     <span class="toolbar-glyph">${TOOLBAR_ICONS.delete}</span>
@@ -799,6 +933,10 @@ class StoryboardWorkspace {
         
         this.canvas = document.createElement("div");
         this.canvas.className = "storyboard-canvas";
+
+        this.selectionMarquee = document.createElement("div");
+        this.selectionMarquee.className = "storyboard-selection-marquee";
+        this.selectionMarquee.style.display = "none";
 
         this.minimap = document.createElement("div");
         this.minimap.className = "storyboard-minimap";
@@ -900,6 +1038,7 @@ class StoryboardWorkspace {
 
         this.canvasContainer.appendChild(this.gridLayer);
         this.canvasContainer.appendChild(this.canvas);
+        this.canvasContainer.appendChild(this.selectionMarquee);
         this.canvasContainer.appendChild(this.minimap);
         this.canvasContainer.appendChild(this.minimapControls);
         main.appendChild(this.canvasContainer);
@@ -934,6 +1073,19 @@ class StoryboardWorkspace {
         this.slotFileInput.style.display = "none";
         document.body.appendChild(this.slotFileInput);
 
+        this.boardPackageInput = document.createElement("input");
+        this.boardPackageInput.type = "file";
+        this.boardPackageInput.accept = ".json,.storyboard.json,application/json";
+        this.boardPackageInput.style.display = "none";
+        document.body.appendChild(this.boardPackageInput);
+        this.boardPackageInput.onchange = async (event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) {
+                await this.importBoardPackageFile(file);
+            }
+        };
+
         document.getElementById("storyboard-close").onclick = () => this.hide();
         this.coreToolbarRail = document.getElementById("storyboard-core-tools");
         this.favoriteToolbarRail = document.getElementById("storyboard-favorite-tools");
@@ -941,10 +1093,13 @@ class StoryboardWorkspace {
         this.themeToggleButton = document.getElementById("storyboard-theme-toggle");
         this.themeToggleGlyph = document.getElementById("storyboard-theme-toggle-glyph");
         this.themeToggleLabel = document.getElementById("storyboard-theme-toggle-label");
+        this.undoButton = document.getElementById("storyboard-undo");
+        this.redoButton = document.getElementById("storyboard-redo");
         this.extensionPickerSearchInput = document.getElementById("storyboard-picker-search");
         this.extensionPickerList = document.getElementById("storyboard-picker-list");
         this.extensionPickerMeta = document.getElementById("storyboard-picker-meta");
         this.extensionPickerStatusEl = document.getElementById("storyboard-picker-status");
+        this.updateHistoryButtons();
         if (this.themeToggleButton) {
             this.themeToggleButton.onclick = () => this.cycleThemeMode();
         }
@@ -968,18 +1123,37 @@ class StoryboardWorkspace {
         this.boardSelector.onchange = (e) => this.show(e.target.value, this.node);
 
         document.getElementById("storyboard-refresh-board").onclick = () => this.loadBoard();
+        if (this.undoButton) {
+            this.undoButton.onclick = () => {
+                void this.undoHistory();
+            };
+        }
+        if (this.redoButton) {
+            this.redoButton.onclick = () => {
+                void this.redoHistory();
+            };
+        }
 
         document.getElementById("storyboard-new-board").onclick = async () => {
-            const name = prompt("Enter new storyboard name:");
-            if (name) {
+            const requestedName = prompt("Enter new storyboard name:");
+            if (requestedName !== null) {
+                const name = this.sanitizeBoardNameInput(requestedName, "Storyboard");
                 this.show(name, this.node);
             }
         };
 
+        document.getElementById("storyboard-duplicate-board").onclick = async () => {
+            await this.duplicateCurrentBoard();
+        };
+
         document.getElementById("storyboard-rename-board").onclick = async () => {
-            const newName = prompt("Enter new name for this storyboard:", this.boardId);
-            if (newName && newName !== this.boardId) {
-                const response = await fetch(`/mkr/storyboard/${this.boardId}/rename/${newName}`, { method: "POST" });
+            const requestedName = prompt("Enter new name for this storyboard:", this.boardId);
+            const newName = this.sanitizeBoardNameInput(requestedName, this.boardId);
+            if (requestedName !== null && newName !== this.boardId) {
+                const response = await fetch(
+                    `/mkr/storyboard/${encodeURIComponent(this.boardId)}/rename/${encodeURIComponent(newName)}`,
+                    { method: "POST" },
+                );
                 const result = await response.json();
                 if (result.status === "ok") {
                     this.show(newName, this.node);
@@ -1055,8 +1229,8 @@ class StoryboardWorkspace {
         input.onchange = async () => {
             const file = input.files && input.files[0];
             if (!file) return;
-            const item = this.boardData.items.find(i => i.id === itemId);
-            if (!item || item.type !== "slot" || item.pinned) return;
+            const item = this.getItemById(itemId);
+            if (!item || item.type !== "slot" || this.isItemLocked(item)) return;
             try {
                 await this.importFileIntoSlot(item, file);
             } catch (err) {
@@ -1127,21 +1301,329 @@ class StoryboardWorkspace {
         await this.saveBoard();
     }
 
+    async createStoryboardItemFromDroppedFile(file, worldX, worldY, options = {}) {
+        if (!file) return null;
+        const label = options.label || file.name || (file.type.startsWith("video/") ? "Dropped Video" : "Dropped Image");
+
+        if (file.type.startsWith("image/")) {
+            const formData = new FormData();
+            formData.append("image", file);
+
+            const response = await fetch(`/mkr/storyboard/${this.boardId}/upload`, {
+                method: "POST",
+                body: formData,
+            });
+            const result = await response.json();
+            if (!result.filename) return null;
+
+            return createImageItem({
+                x: worldX,
+                y: worldY,
+                imageRef: result.filename,
+                label,
+                imageWidth: result.width,
+                imageHeight: result.height,
+                generateId: () => this.generateUUID(),
+            });
+        }
+
+        if (file.type.startsWith("video/")) {
+            const formData = new FormData();
+            formData.append("asset", file);
+
+            const response = await fetch(`/mkr/storyboard/${this.boardId}/upload`, {
+                method: "POST",
+                body: formData,
+            });
+            const result = await response.json();
+            if (!result.filename) return null;
+
+            const videoSize = await new Promise((resolve) => {
+                const probe = document.createElement("video");
+                const objectUrl = URL.createObjectURL(file);
+                probe.preload = "metadata";
+                probe.onloadedmetadata = () => {
+                    URL.revokeObjectURL(objectUrl);
+                    resolve({ w: probe.videoWidth || 640, h: probe.videoHeight || 360 });
+                };
+                probe.onerror = () => {
+                    URL.revokeObjectURL(objectUrl);
+                    resolve({ w: 640, h: 360 });
+                };
+                probe.src = objectUrl;
+            });
+
+            return createVideoItem({
+                x: worldX,
+                y: worldY,
+                videoRef: result.filename,
+                label,
+                videoWidth: videoSize.w,
+                videoHeight: videoSize.h,
+                generateId: () => this.generateUUID(),
+            });
+        }
+
+        return null;
+    }
+
     ensureBoardSettings() {
         if (!this.boardData) {
             this.boardData = {
                 board_id: this.boardId,
+                viewport: { x: 0, y: 0, zoom: 1 },
                 items: [],
+                groups: [],
                 selection: [],
                 settings: normalizeStoryboardSettings(),
             };
         }
+        if (!this.boardData.viewport || typeof this.boardData.viewport !== "object") {
+            this.boardData.viewport = { x: 0, y: 0, zoom: 1 };
+        }
+        if (!Array.isArray(this.boardData.items)) this.boardData.items = [];
+        if (!Array.isArray(this.boardData.selection)) this.boardData.selection = [];
         this.boardData.settings = normalizeStoryboardSettings(this.boardData.settings);
+        this.ensureBoardCollections();
         return this.boardData.settings;
     }
 
     getBoardSettings() {
         return this.ensureBoardSettings();
+    }
+
+    ensureBoardCollections() {
+        if (!this.boardData) return [];
+        this.boardData.groups = normalizeStoryboardCollections(this.boardData.groups, this.boardData.items, {
+            generateId: () => this.generateUUID(),
+        });
+        return this.boardData.groups;
+    }
+
+    normalizeBoardItemStates(options = {}) {
+        if (!this.boardData) return;
+        normalizeStoryboardItems(this.boardData.items, options);
+        const items = this.boardData.items || [];
+        this.boardData.selection = filterStoryboardSelectionIds(this.boardData.selection, items);
+        this.itemLookup = new Map(items.filter((item) => item?.id).map((item) => [item.id, item]));
+        this.visibleItemsCache = getStoryboardVisibleItems(items);
+        this.hiddenItemsCache = getStoryboardHiddenItems(items);
+        this.lockedItemsCache = getStoryboardLockedItems(items);
+    }
+
+    getItemById(itemId) {
+        return this.itemLookup.get(itemId) || null;
+    }
+
+    getSelectedItems() {
+        return (this.boardData?.selection || [])
+            .map((itemId) => this.itemLookup.get(itemId))
+            .filter((item) => item && !this.isItemHidden(item));
+    }
+
+    getVisibleBoardItems() {
+        return this.visibleItemsCache;
+    }
+
+    getHiddenBoardItems() {
+        return this.hiddenItemsCache;
+    }
+
+    getLockedBoardItems() {
+        return this.lockedItemsCache;
+    }
+
+    isItemHidden(item) {
+        return isStoryboardItemHidden(item);
+    }
+
+    isItemLocked(item) {
+        return isStoryboardItemLocked(item);
+    }
+
+    isItemEditable(item) {
+        return isStoryboardItemEditable(item);
+    }
+
+    updateHiddenItemsButton() {
+        return;
+    }
+
+    openBoardImportPicker() {
+        this.boardPackageInput?.click();
+    }
+
+    async revealAllHiddenItems() {
+        const hiddenItems = this.getHiddenBoardItems();
+        if (!hiddenItems.length) return;
+
+        hiddenItems.forEach((item) => {
+            delete item.hidden;
+            normalizeStoryboardItemState(item, { mirrorLegacyPinned: true });
+        });
+        this.normalizeBoardItemStates({ mirrorLegacyPinned: true });
+        this.renderBoard();
+        await this.saveBoard();
+    }
+
+    async setItemsHidden(items, hidden) {
+        const targetItems = (items || [])
+            .filter(Boolean)
+            .filter((item) => !hidden || !this.isItemLocked(item));
+        if (!targetItems.length) return false;
+
+        targetItems.forEach((item) => {
+            if (hidden) item.hidden = true;
+            else delete item.hidden;
+            normalizeStoryboardItemState(item, { mirrorLegacyPinned: true });
+        });
+
+        this.normalizeBoardItemStates({ mirrorLegacyPinned: true });
+        this.renderBoard();
+        await this.saveBoard();
+        return true;
+    }
+
+    async setItemsLocked(items, locked) {
+        const targetItems = (items || []).filter(Boolean);
+        if (!targetItems.length) return false;
+
+        targetItems.forEach((item) => {
+            if (locked) item.locked = true;
+            else delete item.locked;
+            normalizeStoryboardItemState(item, { mirrorLegacyPinned: true });
+        });
+
+        this.normalizeBoardItemStates({ mirrorLegacyPinned: true });
+        this.renderBoard();
+        await this.saveBoard();
+        return true;
+    }
+
+    initializeHistoryState() {
+        this.normalizeBoardItemStates({ mirrorLegacyPinned: true });
+        this.historyUndoStack = [];
+        this.historyRedoStack = [];
+        this.historySnapshot = createStoryboardHistorySnapshot(this.boardData);
+        this.historySignature = createStoryboardHistorySignature(this.boardData);
+        this.updateHistoryButtons();
+    }
+
+    updateHistoryButtons() {
+        if (this.undoButton) {
+            const canUndo = this.historyUndoStack.length > 0;
+            this.undoButton.disabled = !canUndo;
+            this.undoButton.title = canUndo ? "Undo (Cmd/Ctrl+Z)" : "Nothing to undo";
+        }
+        if (this.redoButton) {
+            const canRedo = this.historyRedoStack.length > 0;
+            this.redoButton.disabled = !canRedo;
+            this.redoButton.title = canRedo ? "Redo (Shift+Cmd/Ctrl+Z)" : "Nothing to redo";
+        }
+        this.updateHiddenItemsButton();
+    }
+
+    captureHistoryState() {
+        const nextSnapshot = createStoryboardHistorySnapshot(this.boardData);
+        const nextSignature = createStoryboardHistorySignature(this.boardData);
+
+        if (this.historySnapshot === null || this.historySignature === null) {
+            this.historySnapshot = nextSnapshot;
+            this.historySignature = nextSignature;
+            this.updateHistoryButtons();
+            return;
+        }
+
+        if (this.isApplyingHistory) {
+            this.historySnapshot = nextSnapshot;
+            this.historySignature = nextSignature;
+            this.updateHistoryButtons();
+            return;
+        }
+
+        if (nextSignature !== this.historySignature) {
+            this.historyUndoStack = pushStoryboardHistoryEntry(this.historyUndoStack, this.historySnapshot);
+            this.historyRedoStack = [];
+            this.historySignature = nextSignature;
+            this.historySnapshot = nextSnapshot;
+            this.updateHistoryButtons();
+            return;
+        }
+
+        if (nextSnapshot !== this.historySnapshot) {
+            this.historySnapshot = nextSnapshot;
+        }
+        this.updateHistoryButtons();
+    }
+
+    applyHistorySnapshot(snapshot) {
+        const restored = parseStoryboardHistorySnapshot(snapshot);
+        this.boardData.items = restored.items;
+        this.boardData.groups = restored.groups;
+        this.boardData.selection = restored.selection;
+        this.boardData.settings = normalizeStoryboardSettings(restored.settings);
+        this.normalizeBoardItemStates({ mirrorLegacyPinned: true });
+        this.ensureBoardCollections();
+    }
+
+    async undoHistory() {
+        if (!this.historyUndoStack.length) return;
+        const previousSnapshot = this.historyUndoStack[this.historyUndoStack.length - 1];
+        const currentSnapshot = this.historySnapshot || createStoryboardHistorySnapshot(this.boardData);
+        this.historyUndoStack = this.historyUndoStack.slice(0, -1);
+        this.historyRedoStack = pushStoryboardHistoryEntry(this.historyRedoStack, currentSnapshot);
+        this.isApplyingHistory = true;
+        this.applyHistorySnapshot(previousSnapshot);
+        this.renderBoard();
+        await this.saveBoard();
+        this.isApplyingHistory = false;
+        this.updateHistoryButtons();
+    }
+
+    async redoHistory() {
+        if (!this.historyRedoStack.length) return;
+        const nextSnapshot = this.historyRedoStack[this.historyRedoStack.length - 1];
+        const currentSnapshot = this.historySnapshot || createStoryboardHistorySnapshot(this.boardData);
+        this.historyRedoStack = this.historyRedoStack.slice(0, -1);
+        this.historyUndoStack = pushStoryboardHistoryEntry(this.historyUndoStack, currentSnapshot);
+        this.isApplyingHistory = true;
+        this.applyHistorySnapshot(nextSnapshot);
+        this.renderBoard();
+        await this.saveBoard();
+        this.isApplyingHistory = false;
+        this.updateHistoryButtons();
+    }
+
+    storeViewportState() {
+        if (!this.boardData) return;
+        this.boardData.viewport = {
+            x: Number(this.offset.x) || 0,
+            y: Number(this.offset.y) || 0,
+            zoom: Number(this.scale) || 1,
+        };
+    }
+
+    restoreViewportState() {
+        const viewport = this.boardData?.viewport || {};
+        const zoom = Number(viewport.zoom);
+        const x = Number(viewport.x);
+        const y = Number(viewport.y);
+        this.scale = Number.isFinite(zoom) && zoom > 0 ? Math.max(0.15, Math.min(5, zoom)) : 1;
+        this.offset = {
+            x: Number.isFinite(x) ? x : 0,
+            y: Number.isFinite(y) ? y : 0,
+        };
+    }
+
+    scheduleViewportSave() {
+        if (!this.boardData) return;
+        const scheduledBoardId = this.boardId;
+        if (this.viewportSaveTimer) window.clearTimeout(this.viewportSaveTimer);
+        this.viewportSaveTimer = window.setTimeout(() => {
+            this.viewportSaveTimer = null;
+            if (scheduledBoardId !== this.boardId) return;
+            this.saveBoard();
+        }, 180);
     }
 
     bindSettingsPanel() {
@@ -1183,6 +1665,17 @@ class StoryboardWorkspace {
 
     renderSettingsPanel() {
         const settings = this.getBoardSettings();
+        const signature = JSON.stringify({
+            grid: Boolean(settings.grid),
+            snap: Boolean(settings.snap),
+            show_prompt: Boolean(settings.show_prompt),
+            show_minimap: Boolean(settings.show_minimap),
+            show_inspector: Boolean(settings.show_inspector),
+            grid_spacing: Number(settings.grid_spacing) || 0,
+            settingsOpen: Boolean(this.settingsOpen),
+        });
+        if (signature === this.settingsPanelSignature) return;
+        this.settingsPanelSignature = signature;
         const map = [
             ["storyboard-setting-grid", settings.grid],
             ["storyboard-setting-snap", settings.snap],
@@ -1220,11 +1713,21 @@ class StoryboardWorkspace {
 
     updateChromeVisibility() {
         const settings = this.getBoardSettings();
+        const canShowInspector = Boolean(settings.show_inspector);
+        const signature = JSON.stringify({
+            show_minimap: Boolean(settings.show_minimap),
+            show_prompt: Boolean(settings.show_prompt),
+            canShowInspector,
+            inspectorOpen: Boolean(canShowInspector && this.inspectorOpen),
+            settingsOpen: Boolean(this.settingsOpen),
+        });
+        if (signature === this.chromeVisibilitySignature) return;
+        this.chromeVisibilitySignature = signature;
+
         if (this.minimap) this.minimap.style.display = settings.show_minimap ? "block" : "none";
         if (this.minimapControls) this.minimapControls.style.display = settings.show_minimap ? "grid" : "none";
         const prompt = this.canvasContainer.querySelector(".storyboard-floating-prompt");
         if (prompt) prompt.style.display = settings.show_prompt ? "flex" : "none";
-        const canShowInspector = Boolean(settings.show_inspector);
         if (this.inspector) {
             this.inspector.classList.toggle("storyboard-inspector-hidden", !canShowInspector);
             this.inspector.classList.toggle("open", canShowInspector && this.inspectorOpen);
@@ -1308,6 +1811,7 @@ class StoryboardWorkspace {
         if (open) {
             this.settingsOpen = false;
             this.closeExtensionPicker();
+            this.renderInspector();
         }
         this.updateInspectorToggleState();
         this.updateChromeVisibility();
@@ -1360,10 +1864,129 @@ class StoryboardWorkspace {
         }
     }
 
+    sanitizeBoardNameInput(value, fallback = "Storyboard") {
+        return sanitizeStoryboardBoardName(value, fallback);
+    }
+
+    async duplicateCurrentBoard() {
+        const suggestedName = this.sanitizeBoardNameInput(`${this.boardId} Copy`, `${this.boardId} Copy`);
+        const requestedName = prompt("Duplicate this storyboard as:", suggestedName);
+        if (requestedName === null) return;
+
+        const newName = this.sanitizeBoardNameInput(requestedName, suggestedName);
+        if (!newName || newName === this.boardId) {
+            alert("Choose a new name for the duplicated storyboard.");
+            return;
+        }
+
+        try {
+            const response = await fetch(
+                `/mkr/storyboard/${encodeURIComponent(this.boardId)}/duplicate/${encodeURIComponent(newName)}`,
+                { method: "POST" },
+            );
+            const result = await response.json();
+            if (!response.ok || result.status !== "ok") {
+                alert(result.error || "Duplicate failed. Name might already exist.");
+                return;
+            }
+            await this.show(newName, this.node);
+        } catch (err) {
+            console.error("Storyboard duplicate failed:", err);
+            alert("Duplicate failed. Check console/server logs and retry.");
+        }
+    }
+
+    async exportCurrentBoardPackage() {
+        try {
+            const response = await fetch(`/mkr/storyboard/${encodeURIComponent(this.boardId)}/export`);
+            const packageData = await response.json();
+            if (!response.ok) {
+                alert(packageData?.error || "Export failed.");
+                return;
+            }
+
+            downloadStoryboardJsonFile(
+                createStoryboardPackageFilename(this.boardId, packageData.exported_at),
+                packageData,
+            );
+
+            if (packageData.missing_assets?.length) {
+                alert(`Exported with missing assets: ${packageData.missing_assets.join(", ")}`);
+            }
+        } catch (err) {
+            console.error("Storyboard export failed:", err);
+            alert("Export failed. Check console/server logs and retry.");
+        }
+    }
+
+    async importBoardPackageFile(file) {
+        let packageData = null;
+        try {
+            packageData = JSON.parse(await file.text());
+        } catch (err) {
+            console.error("Storyboard package parse failed:", err);
+            alert("That file is not valid storyboard package JSON.");
+            return;
+        }
+
+        const suggestedName = suggestStoryboardImportName(packageData, file.name.replace(/\.[^.]+$/, ""));
+        const requestedName = prompt("Import this storyboard as:", suggestedName);
+        if (requestedName === null) return;
+
+        const boardName = this.sanitizeBoardNameInput(requestedName, suggestedName);
+        try {
+            const response = await fetch("/mkr/storyboard/import", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    board_id: boardName,
+                    package: packageData,
+                }),
+            });
+            const result = await response.json();
+            if (!response.ok || result.status !== "ok") {
+                alert(result.error || "Import failed.");
+                return;
+            }
+
+            await this.show(result.board_id, this.node);
+            if (result.missing_assets?.length) {
+                alert(`Imported "${result.board_id}" with missing assets: ${result.missing_assets.join(", ")}`);
+            }
+        } catch (err) {
+            console.error("Storyboard import failed:", err);
+            alert("Import failed. Check console/server logs and retry.");
+        }
+    }
+
     hide() {
         this.overlay.style.display = "none";
         this.closeExtensionPicker();
         if (this.contextMenu) this.contextMenu.style.display = "none";
+        this.hideSelectionMarquee();
+        this.clearSelectionPreview();
+        if (this.mediaActivationFrame !== null) {
+            cancelAnimationFrame(this.mediaActivationFrame);
+            this.mediaActivationFrame = null;
+        }
+        this.mediaLoadQueue = [];
+        this.mediaLoadsInFlight.clear();
+        this.mediaUnloadTimers.forEach((timer) => window.clearTimeout(timer));
+        this.mediaUnloadTimers.clear();
+        this.mediaPrewarmQueue = [];
+        this.mediaPrewarmsInFlight.clear();
+        if (this.mediaDeactivationTimer) {
+            window.clearTimeout(this.mediaDeactivationTimer);
+            this.mediaDeactivationTimer = null;
+        }
+        if (this.minimapFrame !== null) {
+            cancelAnimationFrame(this.minimapFrame);
+            this.minimapFrame = null;
+        }
+        if (this.viewportSaveTimer) {
+            window.clearTimeout(this.viewportSaveTimer);
+            this.viewportSaveTimer = null;
+        }
         this.node = null;
     }
 
@@ -1376,9 +1999,12 @@ class StoryboardWorkspace {
         const response = await fetch(`/mkr/storyboard/${this.boardId}?t=${Date.now()}`);
         this.boardData = await response.json();
         this.ensureBoardSettings();
+        this.normalizeBoardItemStates({ mirrorLegacyPinned: true });
+        this.restoreViewportState();
+        this.initializeHistoryState();
         console.log("Storyboard loaded:", this.boardData);
-        if (!this.boardData.selection) this.boardData.selection = [];
         this.renderBoard();
+        this.updateTransform();
         this.renderSettingsPanel();
         this.updateChromeVisibility();
         this.updateGridOverlay();
@@ -1395,6 +2021,9 @@ class StoryboardWorkspace {
 
     async saveBoard(notify = false) {
         this.ensureBoardSettings();
+        this.normalizeBoardItemStates({ mirrorLegacyPinned: true });
+        this.storeViewportState();
+        this.captureHistoryState();
         await fetch(`/mkr/storyboard/${this.boardId}/items`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1437,10 +2066,295 @@ class StoryboardWorkspace {
             .replace(/\b\w/g, (match) => match.toUpperCase());
     }
 
-    selectStoryboardItems(itemIds) {
-        const validIds = (itemIds || []).filter((id) => this.boardData.items.some((item) => item.id === id));
-        this.boardData.selection = validIds;
+    getCollectionById(collectionId) {
+        return this.ensureBoardCollections().find((group) => group.id === collectionId) || null;
+    }
+
+    getCollectionItems(collection) {
+        return getStoryboardCollectionItems(collection, this.boardData.items);
+    }
+
+    focusViewOnItems(items, padding = 120) {
+        const targetItems = getStoryboardVisibleItems(items || []);
+        if (!targetItems.length || !this.canvasContainer) return false;
+        const bounds = this.getItemsBounds(targetItems);
+        if (!bounds) return false;
+
+        const targetWidth = Math.max(1, bounds.w + (padding * 2));
+        const targetHeight = Math.max(1, bounds.h + (padding * 2));
+        const scaleX = this.canvasContainer.clientWidth / targetWidth;
+        const scaleY = this.canvasContainer.clientHeight / targetHeight;
+        this.scale = Math.max(0.15, Math.min(5, Math.min(scaleX, scaleY)));
+        this.centerOnWorldPoint(bounds.x + (bounds.w * 0.5), bounds.y + (bounds.h * 0.5));
+        this.scheduleViewportSave();
+        return true;
+    }
+
+    createCollectionFromSelection() {
+        const selection = this.boardData.selection.filter(Boolean);
+        if (!selection.length) return null;
+
+        const suggestedName = selection.length === 1
+            ? `${this.getStoryboardItemLabel(this.boardData.items.find((item) => item.id === selection[0]))} Collection`
+            : `Collection ${this.ensureBoardCollections().length + 1}`;
+        const requestedName = prompt("Name this collection:", suggestedName);
+        if (requestedName === null) return null;
+
+        const createdAt = new Date().toISOString();
+        const collection = createStoryboardCollection({
+            name: requestedName,
+            itemIds: selection,
+            generateId: () => this.generateUUID(),
+            createdAt,
+            updatedAt: createdAt,
+            index: this.ensureBoardCollections().length,
+        });
+        this.ensureBoardCollections().push(collection);
         this.renderBoard();
+        this.saveBoard();
+        return collection;
+    }
+
+    updateCollectionFromSelection(collectionId) {
+        const collection = this.getCollectionById(collectionId);
+        if (!collection) return;
+        collection.item_ids = Array.from(new Set(this.boardData.selection.filter(Boolean)));
+        collection.updated_at = new Date().toISOString();
+        this.ensureBoardCollections();
+        this.renderBoard();
+        this.saveBoard();
+    }
+
+    renameCollection(collectionId) {
+        const collection = this.getCollectionById(collectionId);
+        if (!collection) return;
+        const requestedName = prompt("Rename collection:", collection.name || "Collection");
+        if (requestedName === null) return;
+        collection.name = String(requestedName || "").trim() || collection.name || "Collection";
+        collection.updated_at = new Date().toISOString();
+        this.renderBoard();
+        this.saveBoard();
+    }
+
+    deleteCollection(collectionId) {
+        const collection = this.getCollectionById(collectionId);
+        if (!collection) return;
+        if (!confirm(`Delete collection "${collection.name}"?`)) return;
+        this.boardData.groups = this.ensureBoardCollections().filter((group) => group.id !== collectionId);
+        this.renderBoard();
+        this.saveBoard();
+    }
+
+    applyCollectionSelection(collectionId, { append = false, focus = false } = {}) {
+        const collection = this.getCollectionById(collectionId);
+        if (!collection) return;
+        const collectionItems = this.getCollectionItems(collection);
+        const visibleItems = collectionItems.filter((item) => !this.isItemHidden(item));
+        const itemIds = visibleItems.map((item) => item.id);
+        if (!itemIds.length) {
+            alert("This collection has no visible items right now. Use Show to reveal it first.");
+            return;
+        }
+        const nextSelection = append
+            ? Array.from(new Set([...this.boardData.selection.filter(Boolean), ...itemIds]))
+            : itemIds;
+        this.selectStoryboardItems(nextSelection);
+        if (focus) this.focusViewOnItems(visibleItems);
+        this.saveBoard();
+    }
+
+    async setCollectionHidden(collectionId, hidden) {
+        const collection = this.getCollectionById(collectionId);
+        if (!collection) return;
+        const collectionItems = this.getCollectionItems(collection);
+        const targetItems = hidden
+            ? collectionItems.filter((item) => !this.isItemHidden(item))
+            : collectionItems.filter((item) => this.isItemHidden(item));
+        if (!targetItems.length) return;
+        await this.setItemsHidden(targetItems, hidden);
+    }
+
+    async setCollectionLocked(collectionId, locked) {
+        const collection = this.getCollectionById(collectionId);
+        if (!collection) return;
+        const collectionItems = this.getCollectionItems(collection);
+        const targetItems = locked
+            ? collectionItems.filter((item) => !this.isItemLocked(item))
+            : collectionItems.filter((item) => this.isItemLocked(item));
+        if (!targetItems.length) return;
+        await this.setItemsLocked(targetItems, locked);
+    }
+
+    renderCollectionsSection(options = {}) {
+        const {
+            allowCreateFromSelection = false,
+            title = "Collections",
+            emptyMessage = "Save a selection as a collection to reselect and focus it later.",
+        } = options;
+        const collections = this.ensureBoardCollections();
+        const selection = this.boardData.selection.filter(Boolean);
+        const hasSelection = selection.length > 0;
+
+        const createButton = allowCreateFromSelection
+            ? `<button type="button" id="action-create-collection"${hasSelection ? "" : " disabled"}>Save Selection as Collection</button>`
+            : "";
+
+        const cards = collections.length
+            ? collections.map((collection) => {
+                const collectionItems = this.getCollectionItems(collection);
+                const itemCount = collectionItems.length;
+                const hiddenCount = collectionItems.filter((item) => this.isItemHidden(item)).length;
+                const lockedCount = collectionItems.filter((item) => this.isItemLocked(item)).length;
+                const hideableCount = collectionItems.filter((item) => !this.isItemHidden(item) && !this.isItemLocked(item)).length;
+                const isSelected = storyboardCollectionMatchesSelection(collection, selection);
+                const statusBits = [
+                    hiddenCount ? `${hiddenCount} hidden` : "",
+                    lockedCount ? `${lockedCount} locked` : "",
+                ].filter(Boolean).join(" • ");
+                return `
+                    <div class="storyboard-collection-card${isSelected ? " is-selected" : ""}" data-collection-id="${escapeHtml(collection.id)}">
+                        <div class="storyboard-collection-card-header">
+                            <div class="storyboard-collection-title-row">
+                                <span class="storyboard-collection-swatch" style="--collection-color: ${escapeHtml(collection.color || "#7dd3fc")}"></span>
+                                <strong>${escapeHtml(collection.name || "Collection")}</strong>
+                            </div>
+                            <div class="storyboard-collection-meta">
+                                <span class="storyboard-collection-count">${itemCount} item${itemCount === 1 ? "" : "s"}</span>
+                                ${statusBits ? `<span class="storyboard-collection-state">${escapeHtml(statusBits)}</span>` : ""}
+                            </div>
+                        </div>
+                        <div class="storyboard-collection-actions-row">
+                            <button type="button" data-collection-action="select" data-collection-id="${escapeHtml(collection.id)}">Select</button>
+                            <button type="button" data-collection-action="add" data-collection-id="${escapeHtml(collection.id)}">Add</button>
+                            <button type="button" data-collection-action="focus" data-collection-id="${escapeHtml(collection.id)}">Focus</button>
+                            <button type="button" data-collection-action="hide" data-collection-id="${escapeHtml(collection.id)}"${hideableCount > 0 ? "" : " disabled"}>Hide</button>
+                            <button type="button" data-collection-action="show" data-collection-id="${escapeHtml(collection.id)}"${hiddenCount > 0 ? "" : " disabled"}>Show</button>
+                            <button type="button" data-collection-action="lock" data-collection-id="${escapeHtml(collection.id)}"${lockedCount < itemCount ? "" : " disabled"}>Lock</button>
+                            <button type="button" data-collection-action="unlock" data-collection-id="${escapeHtml(collection.id)}"${lockedCount > 0 ? "" : " disabled"}>Unlock</button>
+                            ${hasSelection ? `<button type="button" data-collection-action="update" data-collection-id="${escapeHtml(collection.id)}">Update</button>` : ""}
+                            <button type="button" data-collection-action="rename" data-collection-id="${escapeHtml(collection.id)}">Rename</button>
+                            <button type="button" class="danger" data-collection-action="delete" data-collection-id="${escapeHtml(collection.id)}">Delete</button>
+                        </div>
+                    </div>
+                `;
+            }).join("")
+            : `<div class="storyboard-collection-empty">${escapeHtml(emptyMessage)}</div>`;
+
+        return `
+            <div class="storyboard-collection-section">
+                <div class="storyboard-collection-section-header">
+                    <h4>${escapeHtml(title)}</h4>
+                    <span>${collections.length} saved</span>
+                </div>
+                ${createButton}
+                <div class="storyboard-collection-list">${cards}</div>
+            </div>
+        `;
+    }
+
+    bindCollectionInspectorActions() {
+        const createButton = document.getElementById("action-create-collection");
+        if (createButton) {
+            createButton.onclick = () => {
+                this.createCollectionFromSelection();
+            };
+        }
+
+        document.querySelectorAll("[data-collection-action]").forEach((button) => {
+            button.onclick = async () => {
+                const collectionId = button.getAttribute("data-collection-id");
+                const action = button.getAttribute("data-collection-action");
+                if (!collectionId || !action) return;
+
+                if (action === "select") this.applyCollectionSelection(collectionId);
+                else if (action === "add") this.applyCollectionSelection(collectionId, { append: true });
+                else if (action === "focus") this.applyCollectionSelection(collectionId, { focus: true });
+                else if (action === "hide") await this.setCollectionHidden(collectionId, true);
+                else if (action === "show") await this.setCollectionHidden(collectionId, false);
+                else if (action === "lock") await this.setCollectionLocked(collectionId, true);
+                else if (action === "unlock") await this.setCollectionLocked(collectionId, false);
+                else if (action === "update") this.updateCollectionFromSelection(collectionId);
+                else if (action === "rename") this.renameCollection(collectionId);
+                else if (action === "delete") this.deleteCollection(collectionId);
+            };
+        });
+    }
+
+    getCanvasContainerPoint(clientX, clientY) {
+        const rect = this.canvasContainer.getBoundingClientRect();
+        return {
+            x: clientX - rect.left,
+            y: clientY - rect.top,
+        };
+    }
+
+    previewSelection(itemIds) {
+        const resolvedIds = Array.from(new Set((itemIds || []).filter(Boolean)));
+        const previousIds = new Set(this.selectionPreviewIds || []);
+        this.selectionPreviewIds = resolvedIds;
+        const selectedSet = new Set(resolvedIds);
+        if (previousIds.size === selectedSet.size && resolvedIds.every((itemId) => previousIds.has(itemId))) {
+            return;
+        }
+        previousIds.forEach((itemId) => {
+            if (selectedSet.has(itemId)) return;
+            this.itemElements.get(itemId)?.classList.remove("selected");
+        });
+        selectedSet.forEach((itemId) => {
+            if (previousIds.has(itemId)) return;
+            this.itemElements.get(itemId)?.classList.add("selected");
+        });
+    }
+
+    clearSelectionPreview() {
+        this.selectionPreviewIds = null;
+    }
+
+    showSelectionMarquee(pixelRect) {
+        if (!this.selectionMarquee || !pixelRect) return;
+        this.selectionMarquee.style.display = "block";
+        this.selectionMarquee.style.left = `${pixelRect.x}px`;
+        this.selectionMarquee.style.top = `${pixelRect.y}px`;
+        this.selectionMarquee.style.width = `${pixelRect.w}px`;
+        this.selectionMarquee.style.height = `${pixelRect.h}px`;
+    }
+
+    hideSelectionMarquee() {
+        if (!this.selectionMarquee) return;
+        this.selectionMarquee.style.display = "none";
+    }
+
+    selectStoryboardItems(itemIds) {
+        const validIds = filterStoryboardSelectionIds(itemIds, this.boardData.items);
+        this.boardData.selection = validIds;
+        this.clearSelectionPreview();
+        this.renderBoard();
+    }
+
+    selectAllItems() {
+        const allIds = this.getVisibleBoardItems().map((item) => item.id).filter(Boolean);
+        this.selectStoryboardItems(allIds);
+        this.saveBoard();
+    }
+
+    duplicateSelectedItems() {
+        const sourceItems = this.getSelectedItems();
+        if (!sourceItems.length) return;
+        if (sourceItems.some((item) => this.isItemLocked(item))) {
+            alert("Unlock the selected items before duplicating them.");
+            return;
+        }
+
+        const duplicatedItems = cloneStoryboardItemsForPaste(sourceItems, {
+            generateId: () => this.generateUUID(),
+            offsetX: 28,
+            offsetY: 28,
+        });
+        const duplicatedIds = duplicatedItems.map((item) => item.id).filter(Boolean);
+        this.boardData.items.push(...duplicatedItems);
+        this.boardData.selection = duplicatedIds;
+        this.renderBoard();
+        this.saveBoard();
     }
 
     async captureReferenceBasket(itemId) {
@@ -1473,13 +2387,17 @@ class StoryboardWorkspace {
     }
 
     removeSelectedItems() {
-        const selectedSet = new Set(this.boardData.selection);
-        const remaining = this.boardData.items.filter(i => !selectedSet.has(i.id) || i.pinned);
-        this.boardData.items = remaining;
-        this.boardData.selection = this.boardData.selection.filter(id => {
-            const item = this.boardData.items.find(i => i.id === id);
-            return !!item && item.pinned;
-        });
+        const selectedItems = this.getSelectedItems();
+        if (!selectedItems.length) return;
+        if (selectedItems.some((item) => this.isItemLocked(item))) {
+            alert("Unlock the selected items before deleting them.");
+            return;
+        }
+
+        const selectedSet = new Set(selectedItems.map((item) => item.id));
+        this.boardData.items = this.boardData.items.filter((item) => !selectedSet.has(item.id));
+        this.boardData.selection = [];
+        this.ensureBoardCollections();
         this.renderBoard();
         this.saveBoard();
     }
@@ -1677,11 +2595,19 @@ class StoryboardWorkspace {
         let minY = viewportWorld.y;
         let maxX = viewportWorld.x + viewportWorld.w;
         let maxY = viewportWorld.y + viewportWorld.h;
-        for (const item of this.boardData.items) {
-            minX = Math.min(minX, item.x);
-            minY = Math.min(minY, item.y);
-            maxX = Math.max(maxX, item.x + item.w);
-            maxY = Math.max(maxY, item.y + item.h);
+        const baseBounds = !this.isInteracting ? this.worldBoundsBaseCache : null;
+        if (baseBounds) {
+            minX = Math.min(minX, baseBounds.minX);
+            minY = Math.min(minY, baseBounds.minY);
+            maxX = Math.max(maxX, baseBounds.maxX);
+            maxY = Math.max(maxY, baseBounds.maxY);
+        } else {
+            for (const item of this.getVisibleBoardItems()) {
+                minX = Math.min(minX, item.x);
+                minY = Math.min(minY, item.y);
+                maxX = Math.max(maxX, item.x + item.w);
+                maxY = Math.max(maxY, item.y + item.h);
+            }
         }
         return {
             viewportWorld,
@@ -1690,6 +2616,344 @@ class StoryboardWorkspace {
             maxX: maxX + padding,
             maxY: maxY + padding
         };
+    }
+
+    getViewportWorldRect() {
+        if (!this.canvasContainer) return null;
+        return getStoryboardViewportWorldRect({
+            offset: this.offset,
+            scale: this.scale,
+            width: this.canvasContainer.clientWidth,
+            height: this.canvasContainer.clientHeight,
+        });
+    }
+
+    shouldActivateMediaForItem(item, element = null, viewportRect = null) {
+        const resolvedViewportRect = viewportRect || this.getViewportWorldRect();
+        return shouldActivateStoryboardMedia(item, resolvedViewportRect, {
+            scale: this.scale,
+            marginPx: this.isInteracting ? 1320 : undefined,
+            minMarginWorld: this.isInteracting ? 360 : undefined,
+            forceActiveIds: this.boardData?.selection || [],
+            forceActivate: Boolean(element?.classList?.contains("cropping")),
+            currentActive: element?.dataset?.mediaActive !== "false",
+            retainMarginMultiplier: this.isInteracting ? 1.8 : undefined,
+        });
+    }
+
+    deferMediaDeactivation(delayMs = 220) {
+        this.mediaDeactivationHoldUntil = Date.now() + delayMs;
+        if (this.mediaDeactivationTimer) {
+            window.clearTimeout(this.mediaDeactivationTimer);
+        }
+        this.mediaDeactivationTimer = window.setTimeout(() => {
+            this.mediaDeactivationTimer = null;
+            this.scheduleVisibleMediaActivation();
+        }, delayMs + 16);
+    }
+
+    setMediaDormantState(wrapper, item, dormant) {
+        if (!wrapper) return;
+        let placeholder = wrapper.querySelector(".storyboard-media-dormant");
+        if (!placeholder && dormant) {
+            placeholder = document.createElement("div");
+            placeholder.className = "storyboard-media-dormant";
+            wrapper.appendChild(placeholder);
+        }
+        if (!placeholder) return;
+        wrapper.classList.toggle("is-dormant", dormant);
+        placeholder.dataset.mediaType = item?.type || "media";
+        placeholder.innerHTML = dormant
+            ? `<span>${item?.type === "video" ? "Video" : "Image"} loads nearby</span>`
+            : "";
+        placeholder.style.display = dormant ? "flex" : "none";
+        if (dormant) {
+            wrapper.classList.remove("is-loading");
+        }
+    }
+
+    setMediaLoadingState(el, wrapper, loading) {
+        if (el) el.classList.toggle("is-media-loading", loading);
+        if (wrapper) wrapper.classList.toggle("is-loading", loading);
+    }
+
+    setMediaWarmDormantState(el, wrapper, warm) {
+        if (el) el.classList.toggle("is-media-warm-dormant", warm);
+        if (wrapper) wrapper.classList.toggle("is-warm-dormant", warm);
+    }
+
+    cancelPendingMediaUnload(itemId) {
+        const timer = this.mediaUnloadTimers.get(itemId);
+        if (timer) {
+            window.clearTimeout(timer);
+            this.mediaUnloadTimers.delete(itemId);
+        }
+    }
+
+    scheduleMediaUnload(el, item, delayMs = 4200) {
+        if (!el || !item?.id) return;
+        this.cancelPendingMediaUnload(item.id);
+        const timer = window.setTimeout(() => {
+            this.mediaUnloadTimers.delete(item.id);
+            if (!el.isConnected || el.dataset.mediaActive === "true") return;
+
+            if (item.type === "image") {
+                const wrapper = el.querySelector(".image-wrapper");
+                const img = el.querySelector(".image-wrapper img");
+                if (img) {
+                    img.removeAttribute("src");
+                    img.removeAttribute("data-src");
+                    img.removeAttribute("data-storyboard-desired-src");
+                    img.style.display = "none";
+                }
+                this.setMediaWarmDormantState(el, wrapper, false);
+                this.setMediaDormantState(wrapper, item, true);
+            } else if (item.type === "video") {
+                const wrapper = el.querySelector(".video-wrapper");
+                const video = el.querySelector(".video-wrapper video");
+                if (video) {
+                    video.pause();
+                    video.removeAttribute("src");
+                    video.removeAttribute("data-src");
+                    video.removeAttribute("data-storyboard-desired-src");
+                    video.style.display = "none";
+                    video.load();
+                }
+                this.setMediaWarmDormantState(el, wrapper, false);
+                this.setMediaDormantState(wrapper, item, true);
+            }
+        }, delayMs);
+        this.mediaUnloadTimers.set(item.id, timer);
+    }
+
+    rememberPrewarmedMediaSrc(src) {
+        if (!src) return;
+        if (this.mediaPrewarmedSrcs.has(src)) {
+            this.mediaPrewarmedSrcs.delete(src);
+        }
+        this.mediaPrewarmedSrcs.add(src);
+        while (this.mediaPrewarmedSrcs.size > 256) {
+            const oldest = this.mediaPrewarmedSrcs.values().next().value;
+            if (!oldest) break;
+            this.mediaPrewarmedSrcs.delete(oldest);
+        }
+    }
+
+    processMediaPrewarmQueue() {
+        while (this.mediaPrewarmsInFlight.size < this.maxConcurrentMediaPrewarms && this.mediaPrewarmQueue.length > 0) {
+            const next = this.mediaPrewarmQueue.shift();
+            if (!next) break;
+            const { itemId, src } = next;
+            if (!this.itemLookup.has(itemId) || !src || this.mediaPrewarmedSrcs.has(src)) continue;
+
+            this.mediaPrewarmsInFlight.add(src);
+            const probe = new Image();
+            probe.decoding = "async";
+            const finish = () => {
+                this.mediaPrewarmsInFlight.delete(src);
+                this.rememberPrewarmedMediaSrc(src);
+                this.processMediaPrewarmQueue();
+            };
+            probe.onload = finish;
+            probe.onerror = finish;
+            probe.src = src;
+        }
+    }
+
+    scheduleNearbyMediaPrewarm(viewportRect) {
+        if (!viewportRect || !Array.isArray(this.boardData?.items)) return;
+        const prewarmRect = getStoryboardMediaActivationRect(viewportRect, {
+            scale: this.scale,
+            marginPx: this.isInteracting ? 2800 : STORYBOARD_MEDIA_PREWARM_MARGIN_PX,
+            minMarginWorld: this.isInteracting ? 620 : 520,
+        });
+
+        const queuedSrcs = new Set(this.mediaPrewarmQueue.map((entry) => entry.src));
+        const activeSrcs = new Set(
+            Array.from(this.itemElements.values())
+                .filter((element) => element?.dataset?.mediaActive === "true")
+                .map((element) => element.querySelector(".image-wrapper img")?.getAttribute("data-src"))
+                .filter(Boolean),
+        );
+
+        const candidates = this.getVisibleBoardItems()
+            .filter((item) => item?.type === "image" && item.image_ref)
+            .filter((item) => itemIntersectsWorldRect(item, prewarmRect))
+            .map((item) => ({
+                item,
+                src: `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}`,
+            }))
+            .filter(({ item, src }) => !activeSrcs.has(src) && !queuedSrcs.has(src) && !this.mediaPrewarmsInFlight.has(src) && !this.mediaPrewarmedSrcs.has(src))
+            .sort((left, right) => getStoryboardMediaViewportDistance(left.item, viewportRect) - getStoryboardMediaViewportDistance(right.item, viewportRect))
+            .slice(0, 12);
+
+        candidates.forEach(({ item, src }) => {
+            this.mediaPrewarmQueue.push({ itemId: item.id, src });
+        });
+
+        this.processMediaPrewarmQueue();
+    }
+
+    finishQueuedMediaLoad(itemId, element = null, wrapper = null) {
+        requestAnimationFrame(() => {
+            if (itemId) this.mediaLoadsInFlight.delete(itemId);
+            if (element && wrapper && element.dataset.mediaActive === "true") {
+                this.setMediaLoadingState(element, wrapper, false);
+            }
+            this.processMediaLoadQueue();
+        });
+    }
+
+    bindMediaLoadLifecycle(el, wrapper, mediaEl, kind = "image") {
+        if (!mediaEl || mediaEl.dataset.storyboardLifecycleBound === kind) return;
+        const finish = () => this.finishQueuedMediaLoad(el?._itemId, el, wrapper);
+        if (kind === "image") {
+            mediaEl.addEventListener("load", finish);
+        } else {
+            mediaEl.addEventListener("loadeddata", finish);
+        }
+        mediaEl.addEventListener("error", finish);
+        mediaEl.dataset.storyboardLifecycleBound = kind;
+    }
+
+    enqueueMediaLoad({ item, el, wrapper, mediaEl, src, kind }) {
+        if (!item?.id || !el || !wrapper || !mediaEl || !src) return;
+        const itemId = item.id;
+        this.mediaLoadQueue = this.mediaLoadQueue.filter((entry) => entry.itemId !== itemId);
+        this.setMediaLoadingState(el, wrapper, true);
+
+        if (this.mediaLoadsInFlight.has(itemId)) {
+            mediaEl.dataset.storyboardDesiredSrc = src;
+            return;
+        }
+
+        this.mediaLoadQueue.push({ itemId, el, wrapper, mediaEl, src, kind });
+        this.processMediaLoadQueue();
+    }
+
+    processMediaLoadQueue() {
+        while (this.mediaLoadsInFlight.size < this.maxConcurrentMediaLoads && this.mediaLoadQueue.length > 0) {
+            const next = this.mediaLoadQueue.shift();
+            if (!next) break;
+            const { itemId, el, wrapper, mediaEl, src, kind } = next;
+            if (!this.itemLookup.has(itemId) || !el?.isConnected || el.dataset.mediaActive !== "true") {
+                this.setMediaLoadingState(el, wrapper, false);
+                continue;
+            }
+
+            this.mediaLoadsInFlight.add(itemId);
+            this.cancelPendingMediaUnload(itemId);
+            mediaEl.dataset.storyboardDesiredSrc = src;
+            if (kind === "video") {
+                mediaEl.src = src;
+                mediaEl.setAttribute("data-src", src);
+                mediaEl.pause();
+                if (mediaEl.readyState >= 2) {
+                    this.finishQueuedMediaLoad(itemId, el, wrapper);
+                }
+            } else {
+                mediaEl.src = src;
+                mediaEl.setAttribute("data-src", src);
+                if (mediaEl.complete && mediaEl.naturalWidth > 0) {
+                    this.finishQueuedMediaLoad(itemId, el, wrapper);
+                }
+            }
+        }
+    }
+
+    releaseDormantMedia(el, item) {
+        if (!el || !item) return;
+        this.mediaLoadQueue = this.mediaLoadQueue.filter((entry) => entry.itemId !== item.id);
+        this.mediaLoadsInFlight.delete(item.id);
+        if (item.type === "image") {
+            const img = el.querySelector(".image-wrapper img");
+            const wrapper = el.querySelector(".image-wrapper");
+            const canStayWarm = Boolean(img?.getAttribute("data-src"));
+            if (img) {
+                img.style.display = "block";
+            }
+            this.setMediaLoadingState(el, wrapper, false);
+            this.setMediaWarmDormantState(el, wrapper, canStayWarm);
+            if (canStayWarm) {
+                this.setMediaDormantState(wrapper, item, false);
+                this.scheduleMediaUnload(el, item);
+            } else {
+                if (img) img.style.display = "none";
+                this.setMediaDormantState(wrapper, item, true);
+            }
+        } else if (item.type === "video") {
+            const video = el.querySelector(".video-wrapper video");
+            const wrapper = el.querySelector(".video-wrapper");
+            const canStayWarm = Boolean(video?.getAttribute("data-src"));
+            if (video) {
+                video.pause();
+                video.style.display = "block";
+            }
+            this.setMediaLoadingState(el, wrapper, false);
+            this.setMediaWarmDormantState(el, wrapper, canStayWarm);
+            if (canStayWarm) {
+                this.setMediaDormantState(wrapper, item, false);
+                this.scheduleMediaUnload(el, item);
+            } else {
+                if (video) video.style.display = "none";
+                this.setMediaDormantState(wrapper, item, true);
+            }
+        }
+        this.processMediaLoadQueue();
+    }
+
+    updateVisibleMediaActivation() {
+        this.mediaActivationFrame = null;
+        const viewportRect = this.getViewportWorldRect();
+        if (!viewportRect) return;
+        const holdDeactivations = this.isInteracting || Date.now() < this.mediaDeactivationHoldUntil;
+        const pendingActivations = [];
+        this.itemElements.forEach((element, itemId) => {
+            const item = this.getItemById(itemId);
+            if (!item || (item.type !== "image" && item.type !== "video")) return;
+            const shouldBeActive = this.shouldActivateMediaForItem(item, element, viewportRect);
+            const currentlyActive = element.dataset.mediaActive !== "false";
+            if (!shouldBeActive && currentlyActive) {
+                if (!holdDeactivations) {
+                    this.updateItemContent(element, item, false, { mediaActivationRect: viewportRect });
+                }
+            } else if (shouldBeActive && !currentlyActive) {
+                pendingActivations.push({ item, element });
+            }
+        });
+
+        pendingActivations
+            .sort((left, right) => (
+                getStoryboardMediaViewportDistance(left.item, viewportRect)
+                - getStoryboardMediaViewportDistance(right.item, viewportRect)
+            ))
+            .slice(0, STORYBOARD_MEDIA_ACTIVATION_BATCH_SIZE)
+            .forEach(({ item, element }) => {
+                this.updateItemContent(element, item, false, { mediaActivationRect: viewportRect });
+            });
+
+        if (pendingActivations.length > STORYBOARD_MEDIA_ACTIVATION_BATCH_SIZE) {
+            this.scheduleVisibleMediaActivation();
+        }
+        this.scheduleNearbyMediaPrewarm(viewportRect);
+        if (holdDeactivations) {
+            this.deferMediaDeactivation();
+        }
+    }
+
+    scheduleVisibleMediaActivation() {
+        if (this.mediaActivationFrame !== null) return;
+        this.mediaActivationFrame = requestAnimationFrame(() => {
+            this.updateVisibleMediaActivation();
+        });
+    }
+
+    scheduleMinimapUpdate() {
+        if (this.minimapFrame !== null) return;
+        this.minimapFrame = requestAnimationFrame(() => {
+            this.minimapFrame = null;
+            this.updateMinimap();
+        });
     }
 
     centerOnWorldPoint(worldX, worldY) {
@@ -1725,23 +2989,74 @@ class StoryboardWorkspace {
         const scaleY = this.canvasContainer.clientHeight / worldH;
         this.scale = Math.max(0.15, Math.min(5, Math.min(scaleX, scaleY)));
         this.centerOnWorldPoint(minX + worldW * 0.5, minY + worldH * 0.5);
+        this.scheduleViewportSave();
     }
 
     centerOnContent() {
         if (!this.canvasContainer) return;
         const { minX, minY, maxX, maxY } = this.getWorldBounds(0);
         this.centerOnWorldPoint(minX + (maxX - minX) * 0.5, minY + (maxY - minY) * 0.5);
+        this.scheduleViewportSave();
     }
 
     updateMinimapControls() {
         const label = document.getElementById("storyboard-minimap-zoom-label");
-        if (label) label.textContent = `${Math.round(this.scale * 100)}%`;
+        if (label) {
+            const nextValue = `${Math.round(this.scale * 100)}%`;
+            if (label.textContent !== nextValue) label.textContent = nextValue;
+        }
+    }
+
+    updateItemLayoutStyles(el, item, index) {
+        const rotation = this.getItemRotation(item);
+        const nextState = {
+            x: item.x,
+            y: item.y,
+            w: item.w,
+            h: item.h,
+            rotation,
+            zIndex: item.type === "frame" ? 100 + index : 1000 + index,
+        };
+        const previous = el._layoutState || {};
+
+        if (previous.x !== nextState.x) el.style.left = `${nextState.x}px`;
+        if (previous.y !== nextState.y) el.style.top = `${nextState.y}px`;
+        if (previous.w !== nextState.w) el.style.width = `${nextState.w}px`;
+        if (previous.h !== nextState.h) el.style.height = `${nextState.h}px`;
+        if (previous.rotation !== nextState.rotation) {
+            el.style.transformOrigin = "center center";
+            el.style.transform = nextState.rotation ? `rotate(${nextState.rotation}deg)` : "";
+        }
+        if (previous.zIndex !== nextState.zIndex) {
+            el.style.zIndex = String(nextState.zIndex);
+        }
+
+        el._layoutState = nextState;
     }
 
     renderBoard() {
         this.ensureBoardSettings();
+        this.normalizeBoardItemStates({ mirrorLegacyPinned: true });
+        const visibleItems = this.getVisibleBoardItems();
+        if (visibleItems.length > 0) {
+            let minX = Number.POSITIVE_INFINITY;
+            let minY = Number.POSITIVE_INFINITY;
+            let maxX = Number.NEGATIVE_INFINITY;
+            let maxY = Number.NEGATIVE_INFINITY;
+            visibleItems.forEach((item) => {
+                minX = Math.min(minX, item.x);
+                minY = Math.min(minY, item.y);
+                maxX = Math.max(maxX, item.x + item.w);
+                maxY = Math.max(maxY, item.y + item.h);
+            });
+            this.worldBoundsBaseCache = { minX, minY, maxX, maxY };
+        } else {
+            this.worldBoundsBaseCache = null;
+        }
+        const mediaActivationRect = this.getViewportWorldRect();
+        const selectedIds = new Set(this.boardData.selection);
         // Track which items are current to remove old ones later
-        const currentItemIds = new Set(this.boardData.items.map(i => i.id));
+        const currentItemIds = new Set(visibleItems.map(i => i.id));
         
         // Remove DOM elements for items that no longer exist
         for (const [id, el] of this.itemElements.entries()) {
@@ -1751,14 +3066,21 @@ class StoryboardWorkspace {
             }
         }
 
-        this.boardData.items.forEach((item, index) => {
+        visibleItems.forEach((item, index) => {
             let el = this.itemElements.get(item.id);
             let isNew = false;
+
+            if (el && el.dataset.interactionVersion !== STORYBOARD_ITEM_INTERACTION_VERSION) {
+                el.remove();
+                this.itemElements.delete(item.id);
+                el = null;
+            }
             
             if (!el) {
                 el = document.createElement("div");
                 el._itemId = item.id;
                 el.className = "storyboard-item";
+                el.dataset.interactionVersion = STORYBOARD_ITEM_INTERACTION_VERSION;
                 this.itemElements.set(item.id, el);
                 this.canvas.appendChild(el);
                 isNew = true;
@@ -1768,33 +3090,27 @@ class StoryboardWorkspace {
             }
 
             // Update state
-            el.classList.toggle("selected", this.boardData.selection.includes(item.id));
-            
-            // Set styles
-            el.style.left = `${item.x}px`;
-            el.style.top = `${item.y}px`;
-            el.style.width = `${item.w}px`;
-            el.style.height = `${item.h}px`;
-            el.style.transformOrigin = "center center";
-            const rotation = this.getItemRotation(item);
-            el.style.transform = rotation ? `rotate(${rotation}deg)` : "";
-            
-            // Ensure frames are behind other items, but keep order within groups
-            const baseZ = item.type === "frame" ? 100 : 1000;
-            el.style.zIndex = (baseZ + index).toString();
+            el.classList.toggle("selected", selectedIds.has(item.id));
+            el.classList.toggle("is-locked", this.isItemLocked(item));
+            this.updateItemLayoutStyles(el, item, index);
             
             // Update item-type specific content
-            this.updateItemContent(el, item, isNew);
+            this.updateItemContent(el, item, isNew, { mediaActivationRect });
         });
 
-        this.renderInspector();
-        this.updateMinimap();
+        const settings = this.getBoardSettings();
+        if (settings.show_inspector && this.inspectorOpen) {
+            this.renderInspector();
+        }
+        this.scheduleMinimapUpdate();
         this.updateGridOverlay();
         this.updateChromeVisibility();
+        this.updateHiddenItemsButton();
     }
 
     updateMinimap() {
         if (!this.canvasContainer || !this.minimapItems || !this.minimapViewport) return;
+        if (!this.getBoardSettings().show_minimap) return;
 
         const minimapRect = this.minimap.getBoundingClientRect();
         const minimapWidth = Math.max(1, minimapRect.width);
@@ -1812,19 +3128,43 @@ class StoryboardWorkspace {
 
         this.minimapView = { minX, minY, mapScale, offsetX, offsetY };
 
-        this.minimapItems.innerHTML = "";
-        for (const item of this.boardData.items) {
-            const rect = document.createElement("div");
-            rect.className = "storyboard-minimap-item";
-            const colors = this.getMinimapItemColors(item);
-            rect.style.backgroundColor = colors.fill;
-            rect.style.borderColor = colors.border;
-            rect.style.left = `${offsetX + (item.x - minX) * mapScale}px`;
-            rect.style.top = `${offsetY + (item.y - minY) * mapScale}px`;
-            rect.style.width = `${Math.max(2, item.w * mapScale)}px`;
-            rect.style.height = `${Math.max(2, item.h * mapScale)}px`;
-            this.minimapItems.appendChild(rect);
+        const visibleItems = this.getVisibleBoardItems();
+        const currentIds = new Set(visibleItems.map((item) => item.id));
+        for (const [id, rect] of this.minimapItemElements.entries()) {
+            if (!currentIds.has(id)) {
+                rect.remove();
+                this.minimapItemElements.delete(id);
+            }
         }
+
+        const fragment = document.createDocumentFragment();
+        for (const item of visibleItems) {
+            let rect = this.minimapItemElements.get(item.id);
+            if (!rect) {
+                rect = document.createElement("div");
+                rect.className = "storyboard-minimap-item";
+                this.minimapItemElements.set(item.id, rect);
+            }
+            const colors = this.getMinimapItemColors(item);
+            const nextState = {
+                fill: colors.fill,
+                border: colors.border,
+                left: `${offsetX + (item.x - minX) * mapScale}px`,
+                top: `${offsetY + (item.y - minY) * mapScale}px`,
+                width: `${Math.max(2, item.w * mapScale)}px`,
+                height: `${Math.max(2, item.h * mapScale)}px`,
+            };
+            const previous = rect._minimapState || {};
+            if (previous.fill !== nextState.fill) rect.style.backgroundColor = nextState.fill;
+            if (previous.border !== nextState.border) rect.style.borderColor = nextState.border;
+            if (previous.left !== nextState.left) rect.style.left = nextState.left;
+            if (previous.top !== nextState.top) rect.style.top = nextState.top;
+            if (previous.width !== nextState.width) rect.style.width = nextState.width;
+            if (previous.height !== nextState.height) rect.style.height = nextState.height;
+            rect._minimapState = nextState;
+            fragment.appendChild(rect);
+        }
+        this.minimapItems.replaceChildren(fragment);
 
         this.minimapViewport.style.left = `${offsetX + (viewportWorld.x - minX) * mapScale}px`;
         this.minimapViewport.style.top = `${offsetY + (viewportWorld.y - minY) * mapScale}px`;
@@ -1846,6 +3186,7 @@ class StoryboardWorkspace {
 
     addItemInteractions(el, initialItem) {
         const itemId = initialItem.id;
+        let lastPointerDownStamp = -1;
         const isInteractiveTarget = (target) => {
             if (!(target instanceof Element)) return false;
             return Boolean(target.closest([
@@ -1877,8 +3218,9 @@ class StoryboardWorkspace {
             cropGlyph.title = "Edit Crop";
             cropGlyph.onclick = (e) => {
                 e.stopPropagation();
-                const item = this.boardData.items.find(i => i.id === itemId);
+                const item = this.getItemById(itemId);
                 if (!item) return;
+                if (this.isItemLocked(item)) return;
                 
                 const wasCropping = el.classList.contains("cropping");
                 el.classList.toggle("cropping");
@@ -1916,9 +3258,9 @@ class StoryboardWorkspace {
         const resizeHandle = document.createElement("div");
         resizeHandle.className = "storyboard-resize-handle";
         resizeHandle.onmousedown = (e) => {
-            const item = this.boardData.items.find(i => i.id === itemId);
+            const item = this.getItemById(itemId);
             if (!item) return;
-            if (item.pinned) return;
+            if (this.isItemLocked(item)) return;
             
             e.stopPropagation();
             e.preventDefault();
@@ -1990,20 +3332,32 @@ class StoryboardWorkspace {
         };
         el.appendChild(resizeHandle);
         
-        const handleItemMouseDown = (e) => {
+        const handleItemPress = (e) => {
             if (isInteractiveTarget(e.target)) return;
+            if (e.type === "mousedown" && lastPointerDownStamp >= 0 && Math.abs(e.timeStamp - lastPointerDownStamp) < 8) {
+                return;
+            }
+            if (e.type === "pointerdown") {
+                lastPointerDownStamp = e.timeStamp;
+            }
             this.beginItemDrag(itemId, e);
         };
-        el.addEventListener("mousedown", handleItemMouseDown, true);
+        el.addEventListener("pointerdown", handleItemPress, true);
+        el.addEventListener("mousedown", handleItemPress, true);
     }
 
     beginItemDrag(itemId, e) {
-        const item = this.boardData.items.find(i => i.id === itemId);
+        const item = this.getItemById(itemId);
         if (!item) return;
         if (e.button !== 0) return;
+        if (this.isItemHidden(item)) return;
 
         e.stopPropagation();
         e.preventDefault();
+
+        const selectionHadItem = this.boardData.selection.includes(itemId);
+        const selectionCount = this.boardData.selection.length;
+        let selectionChanged = false;
 
         if (e.shiftKey) {
             if (this.boardData.selection.includes(itemId)) {
@@ -2011,12 +3365,20 @@ class StoryboardWorkspace {
             } else {
                 this.boardData.selection.push(itemId);
             }
+            selectionChanged = true;
+        } else if (!selectionHadItem || selectionCount <= 1) {
+            const nextSelection = [itemId];
+            selectionChanged = this.boardData.selection.length !== 1 || this.boardData.selection[0] !== itemId;
+            this.boardData.selection = nextSelection;
         } else {
-            this.boardData.selection = [itemId];
+            // Keep the full multi-selection when dragging an already-selected item.
+            this.boardData.selection = [...this.boardData.selection];
         }
-        this.renderBoard();
+        if (selectionChanged) {
+            this.renderBoard();
+        }
 
-        if (item.pinned) {
+        if (this.isItemLocked(item)) {
             this.saveBoard();
             return;
         }
@@ -2024,6 +3386,16 @@ class StoryboardWorkspace {
         this.isInteracting = true;
         const startX = e.clientX;
         const startY = e.clientY;
+        const usePointerEvents = typeof e.pointerId === "number";
+        const pointerId = usePointerEvents ? e.pointerId : null;
+        const eventTarget = e.currentTarget instanceof Element ? e.currentTarget : (e.target instanceof Element ? e.target : null);
+        if (usePointerEvents && eventTarget?.setPointerCapture) {
+            try {
+                eventTarget.setPointerCapture(pointerId);
+            } catch (_) {
+                // Ignore pointer capture failures and continue with window listeners.
+            }
+        }
 
         const itemsToMoveIds = new Set(this.boardData.selection);
         this.boardData.selection.forEach(id => {
@@ -2041,11 +3413,17 @@ class StoryboardWorkspace {
         });
 
         const selectedElements = Array.from(itemsToMoveIds).map(id => {
-            const it = this.boardData.items.find(i => i.id === id);
+            const it = this.getItemById(id);
             const domEl = this.itemElements.get(id);
             return { item: it, domEl, startX: it.x, startY: it.y };
-        }).filter(entry => entry.domEl && entry.item);
+        }).filter(entry => entry.domEl && entry.item && this.isItemEditable(entry.item));
         const anchorEntry = selectedElements.find(entry => entry.item.id === itemId) || selectedElements[0];
+        if (!anchorEntry) {
+            this.isInteracting = false;
+            this.saveBoard();
+            return;
+        }
+        let dragFinished = false;
 
         const onMouseMove = (moveEvent) => {
             let dx = (moveEvent.clientX - startX) / this.scale;
@@ -2069,9 +3447,21 @@ class StoryboardWorkspace {
         };
 
         const onMouseUp = () => {
+            if (dragFinished) return;
+            dragFinished = true;
             this.isInteracting = false;
+            window.removeEventListener("pointermove", onMouseMove);
+            window.removeEventListener("pointerup", onMouseUp);
+            window.removeEventListener("pointercancel", onMouseUp);
             window.removeEventListener("mousemove", onMouseMove);
             window.removeEventListener("mouseup", onMouseUp);
+            if (usePointerEvents && eventTarget?.releasePointerCapture) {
+                try {
+                    eventTarget.releasePointerCapture(pointerId);
+                } catch (_) {
+                    // Pointer might already be released.
+                }
+            }
 
             if (this.needsReload) {
                 this.loadBoard();
@@ -2088,8 +3478,59 @@ class StoryboardWorkspace {
             }
         };
 
+        window.addEventListener("pointermove", onMouseMove);
+        window.addEventListener("pointerup", onMouseUp);
+        window.addEventListener("pointercancel", onMouseUp);
         window.addEventListener("mousemove", onMouseMove);
         window.addEventListener("mouseup", onMouseUp);
+    }
+
+    noteContentOverflows(content) {
+        if (!content) return false;
+        return content.scrollHeight > content.clientHeight + 1 || content.scrollWidth > content.clientWidth + 1;
+    }
+
+    fitNoteTextToBounds(content, item, meta) {
+        if (!content || !item) return;
+
+        const style = item.note_style || {};
+        const hasMeta = Boolean(meta && meta.style.display !== "none" && meta.childElementCount);
+        const metaHeight = hasMeta ? meta.offsetHeight : 0;
+        const topPadding = hasMeta ? Math.max(18, metaHeight + 14) : 14;
+        const bottomPadding = 10;
+        const horizontalPadding = 10;
+        const text = String(item.content || "");
+        const textLength = Math.max(1, text.trim().length || 1);
+        const usableWidth = Math.max(40, item.w - horizontalPadding * 2);
+        const usableHeight = Math.max(40, item.h - topPadding - bottomPadding);
+        const maxFontSize = Math.max(12, Math.min(style.font_size || 72, item.h * 0.5, 72));
+        const minFontSize = 11;
+
+        content.style.padding = `${topPadding}px ${horizontalPadding}px ${bottomPadding}px`;
+
+        let fontSize = style.font_size || (Math.sqrt((usableWidth * usableHeight) / textLength) * 0.82);
+        fontSize = Math.max(minFontSize, Math.min(fontSize, maxFontSize));
+        content.style.fontSize = `${fontSize}px`;
+
+        let guard = 0;
+        while (fontSize > minFontSize && this.noteContentOverflows(content) && guard < 64) {
+            fontSize -= 1;
+            content.style.fontSize = `${fontSize}px`;
+            guard += 1;
+        }
+
+        if (!style.font_size) {
+            while (fontSize < maxFontSize && guard < 96) {
+                const nextFontSize = fontSize + 1;
+                content.style.fontSize = `${nextFontSize}px`;
+                if (this.noteContentOverflows(content)) {
+                    content.style.fontSize = `${fontSize}px`;
+                    break;
+                }
+                fontSize = nextFontSize;
+                guard += 1;
+            }
+        }
     }
 
     renderCropUI(el, item) {
@@ -2200,27 +3641,28 @@ class StoryboardWorkspace {
 
     handleCopy() {
         if (this.boardData.selection.length > 0) {
-            this.internalClipboard = this.boardData.selection.map(id => {
-                const item = this.boardData.items.find(i => i.id === id);
-                return { ...item };
-            }).filter(Boolean);
+            const selectedItems = this.getSelectedItems();
+            if (selectedItems.some((item) => this.isItemLocked(item))) {
+                alert("Unlock the selected items before copying them.");
+                return;
+            }
+            this.internalClipboard = cloneStoryboardItemsForPaste(selectedItems, {
+                generateId: (item) => item.id,
+                offsetX: 0,
+                offsetY: 0,
+            });
         }
     }
 
     handlePaste() {
         if (this.internalClipboard.length > 0) {
-            const newSelection = [];
-            this.internalClipboard.forEach(item => {
-                const newItem = {
-                    ...item,
-                    id: this.generateUUID(),
-                    x: item.x + 20,
-                    y: item.y + 20
-                };
-                this.boardData.items.push(newItem);
-                newSelection.push(newItem.id);
+            const duplicatedItems = cloneStoryboardItemsForPaste(this.internalClipboard, {
+                generateId: () => this.generateUUID(),
+                offsetX: 20,
+                offsetY: 20,
             });
-            this.boardData.selection = newSelection;
+            this.boardData.items.push(...duplicatedItems);
+            this.boardData.selection = duplicatedItems.map((item) => item.id).filter(Boolean);
             this.renderBoard();
             this.saveBoard();
         }
@@ -2273,8 +3715,11 @@ class StoryboardWorkspace {
         }
     }
 
-    updateItemContent(el, item, isNew) {
+    updateItemContent(el, item, isNew, options = {}) {
         const extensionDefinition = this.extensionRegistry.get(item.type);
+        if ((item.type === "mood_tag" || item.type === "scene_divider") && !this.isItemLocked(item)) {
+            item.pinned = false;
+        }
         el.classList.remove(
             "image-item",
             "video-item",
@@ -2305,27 +3750,31 @@ class StoryboardWorkspace {
             pill.remove();
         }
 
-        let pinGlyph = el.querySelector(".storyboard-pin-glyph");
-        if (item.pinned) {
-            if (!pinGlyph) {
-                pinGlyph = document.createElement("div");
-                pinGlyph.className = "storyboard-pin-glyph";
-                pinGlyph.innerHTML = `
+        let lockGlyph = el.querySelector(".storyboard-lock-glyph");
+        if (this.isItemLocked(item)) {
+            if (!lockGlyph) {
+                lockGlyph = document.createElement("div");
+                lockGlyph.className = "storyboard-lock-glyph";
+                lockGlyph.innerHTML = `
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                        <path d="M15 3l6 6-2 2-2-2-3 3v4l-2 2v3h-2v-3l-2-2v-4L5 9 3 11 1 9l6-6 8 0z"></path>
+                        <path d="M8 11V8.5a4 4 0 1 1 8 0V11"></path>
+                        <rect x="6" y="11" width="12" height="9" rx="2"></rect>
                     </svg>
                 `;
-                pinGlyph.title = "Pinned";
-                el.appendChild(pinGlyph);
+                lockGlyph.title = "Locked";
+                el.appendChild(lockGlyph);
             }
-        } else if (pinGlyph) {
-            pinGlyph.remove();
+        } else if (lockGlyph) {
+            lockGlyph.remove();
         }
 
         if (item.type === "image") {
             el.classList.add("image-item");
             const mediaPresentation = this.getMediaPresentation(item);
+            const mediaActive = this.shouldActivateMediaForItem(item, el, options.mediaActivationRect || null);
             el.dataset.mediaPresentation = mediaPresentation;
+            el.dataset.mediaActive = mediaActive ? "true" : "false";
+            el.classList.toggle("is-media-dormant", !mediaActive);
             let wrapper = el.querySelector(".image-wrapper");
             if (!wrapper) {
                 wrapper = document.createElement("div");
@@ -2337,17 +3786,30 @@ class StoryboardWorkspace {
             if (!img) {
                 img = document.createElement("img");
                 img.draggable = false;
+                img.decoding = "async";
+                img.loading = "eager";
+                img.fetchPriority = "high";
                 wrapper.appendChild(img);
             }
-            // Use item.image_ref directly as cache key, don't force-reload with timestamp every render
+            this.bindMediaLoadLifecycle(el, wrapper, img, "image");
             const src = `/mkr/storyboard/asset/${this.boardId}/${item.image_ref}`;
-            if (img.getAttribute("data-src") !== src) {
-                img.src = src + `?t=${Date.now()}`;
-                img.setAttribute("data-src", src);
+            if (!mediaActive) {
+                this.releaseDormantMedia(el, item);
+            } else {
+                this.cancelPendingMediaUnload(item.id);
+                this.setMediaDormantState(wrapper, item, false);
+                img.style.display = "block";
+                if (img.getAttribute("data-src") !== src) {
+                    this.enqueueMediaLoad({ item, el, wrapper, mediaEl: img, src, kind: "image" });
+                } else if (img.complete && img.naturalWidth > 0) {
+                    this.setMediaLoadingState(el, wrapper, false);
+                }
             }
+            const cropGlyph = el.querySelector(".storyboard-crop-glyph");
+            if (cropGlyph) cropGlyph.style.display = this.isItemLocked(item) ? "none" : "";
 
             // Apply crop to display
-            if (item.crop) {
+            if (mediaActive && item.crop) {
                 const { x, y, w, h } = item.crop;
                 
                 // We use percentage-based scaling to show the cropped area.
@@ -2361,7 +3823,7 @@ class StoryboardWorkspace {
                 img.style.left = `${-x * scaleX * 100}%`;
                 img.style.top = `${-y * scaleY * 100}%`;
                 img.style.objectFit = "cover"; 
-            } else {
+            } else if (mediaActive) {
                 img.style.width = "100%";
                 img.style.height = "100%";
                 img.style.left = "0";
@@ -2370,11 +3832,21 @@ class StoryboardWorkspace {
             }
 
             this.renderMediaMeta(el, item, "image-meta", mediaPresentation);
-            this.updateImagePalette(el, item);
+            if (mediaActive) {
+                this.updateImagePalette(el, item);
+            } else {
+                const mediaMeta = el.querySelector(".image-meta");
+                if (mediaMeta) mediaMeta.style.display = "none";
+                const paletteBar = el.querySelector(".image-palette-bar");
+                if (paletteBar) paletteBar.style.display = "none";
+            }
         } else if (item.type === "video") {
             el.classList.add("video-item");
             const mediaPresentation = this.getMediaPresentation(item);
+            const mediaActive = this.shouldActivateMediaForItem(item, el, options.mediaActivationRect || null);
             el.dataset.mediaPresentation = mediaPresentation;
+            el.dataset.mediaActive = mediaActive ? "true" : "false";
+            el.classList.toggle("is-media-dormant", !mediaActive);
             let wrapper = el.querySelector(".video-wrapper");
             if (!wrapper) {
                 wrapper = document.createElement("div");
@@ -2394,14 +3866,26 @@ class StoryboardWorkspace {
                 video.draggable = false;
                 wrapper.appendChild(video);
             }
+            this.bindMediaLoadLifecycle(el, wrapper, video, "video");
             const src = `/mkr/storyboard/asset/${this.boardId}/${item.video_ref}`;
-            if (video.getAttribute("data-src") !== src) {
-                video.src = src + `?t=${Date.now()}`;
-                video.setAttribute("data-src", src);
-                video.pause();
+            if (!mediaActive) {
+                this.releaseDormantMedia(el, item);
+            } else {
+                this.cancelPendingMediaUnload(item.id);
+                this.setMediaDormantState(wrapper, item, false);
+                video.style.display = "block";
+                if (video.getAttribute("data-src") !== src) {
+                    this.enqueueMediaLoad({ item, el, wrapper, mediaEl: video, src, kind: "video" });
+                } else if (video.readyState >= 2) {
+                    this.setMediaLoadingState(el, wrapper, false);
+                }
             }
 
             this.renderMediaMeta(el, item, "video-meta", mediaPresentation);
+            if (!mediaActive) {
+                const mediaMeta = el.querySelector(".video-meta");
+                if (mediaMeta) mediaMeta.style.display = "none";
+            }
             
         } else if (item.type === "slot") {
             el.classList.add("slot-item");
@@ -2430,11 +3914,15 @@ class StoryboardWorkspace {
             label.innerText = visibleLabel;
             label.style.display = visibleLabel ? "block" : "none";
             el.title = "Empty slot";
-            addGlyph.title = "Click to import image or video";
+            addGlyph.disabled = this.isItemLocked(item);
+            addGlyph.title = this.isItemLocked(item)
+                ? "Unlock this slot before importing media"
+                : "Click to import image or video";
             addGlyph.setAttribute("aria-label", `Add media to ${item.label || "empty slot"}`);
             addGlyph.onmousedown = (e) => e.stopPropagation();
             addGlyph.onclick = (e) => {
                 e.stopPropagation();
+                if (this.isItemLocked(item)) return;
                 this.promptImportForSlot(item.id);
             };
             
@@ -2481,23 +3969,7 @@ class StoryboardWorkspace {
                 el.style.height = `${item.h}px`;
             }
 
-            container.innerHTML = "";
-            colors.forEach(hex => {
-                const pill = document.createElement("div");
-                pill.className = "palette-color";
-                pill.style.backgroundColor = hex;
-                pill.style.color = this.getContrastColor(hex);
-                pill.innerText = hex.toUpperCase();
-                pill.title = `Click to copy: ${hex}`;
-                pill.onmousedown = (e) => e.stopPropagation();
-                pill.onclick = async (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    const success = await this.copyToClipboard(hex.toUpperCase());
-                    if (success) this.showCopyFeedback(pill);
-                };
-                container.appendChild(pill);
-            });
+            this.renderPaletteWidgetColors(container, colors);
             
         } else if (item.type === "note") {
             el.classList.add("note-item");
@@ -2505,26 +3977,7 @@ class StoryboardWorkspace {
             el.style.backgroundColor = bgColor;
             el.style.color = this.getContrastColor(bgColor);
 
-            let meta = el.querySelector(".note-meta");
-            if (!meta) {
-                meta = document.createElement("div");
-                meta.className = "note-meta";
-                el.appendChild(meta);
-            }
-            meta.innerHTML = "";
-            if (item.label) {
-                const labelChip = document.createElement("div");
-                labelChip.className = "note-chip note-chip-label";
-                labelChip.innerText = item.label;
-                meta.appendChild(labelChip);
-            }
-            (item.tags || []).forEach(tag => {
-                const tagChip = document.createElement("div");
-                tagChip.className = "note-chip note-chip-tag";
-                tagChip.innerText = `#${tag}`;
-                meta.appendChild(tagChip);
-            });
-            meta.style.display = meta.children.length > 0 ? "flex" : "none";
+            const meta = this.renderNoteMeta(el, item);
             
             let content = el.querySelector(".note-content");
             if (!content) {
@@ -2532,7 +3985,7 @@ class StoryboardWorkspace {
                 content.className = "note-content";
                 el.appendChild(content);
             }
-            content.contentEditable = !item.pinned;
+            content.contentEditable = !this.isItemLocked(item);
             content.spellcheck = false;
             if (content.innerText !== (item.content || "")) {
                 content.innerText = item.content || "";
@@ -2540,11 +3993,13 @@ class StoryboardWorkspace {
             content.onmousedown = (e) => e.stopPropagation();
             content.oninput = () => {
                 item.content = content.innerText;
+                this.fitNoteTextToBounds(content, item, meta);
             };
             content.onpaste = (e) => {
                 e.preventDefault();
                 const text = (e.clipboardData || window.clipboardData).getData("text/plain");
                 document.execCommand("insertText", false, text);
+                requestAnimationFrame(() => this.fitNoteTextToBounds(content, item, meta));
             };
             content.onblur = () => {
                 item.content = content.innerText;
@@ -2552,14 +4007,10 @@ class StoryboardWorkspace {
             };
             
             const style = item.note_style || {};
-            const textLength = (item.content || "").length;
-            const area = item.w * item.h;
-            let fontSize = style.font_size || (Math.sqrt(area / (textLength || 1)) * 0.8);
-            fontSize = Math.max(12, Math.min(fontSize, item.h * 0.5));
-            content.style.fontSize = `${fontSize}px`;
             content.style.fontFamily = style.font_family || "'Roboto', sans-serif";
             content.style.fontWeight = style.font_weight || "700";
             content.style.textAlign = style.text_align || "center";
+            this.fitNoteTextToBounds(content, item, meta);
             
         } else if (item.type === "frame") {
             el.classList.add("frame-item");
@@ -2717,18 +4168,20 @@ class StoryboardWorkspace {
         }
 
         const palettePosition = item.palette_position || "left";
-        if (palettePosition === "left") {
-            paletteBar.dataset.position = "left";
-            paletteBar.style.left = "-14px";
-            paletteBar.style.bottom = "50%";
-            paletteBar.style.transform = "translate(-100%, 50%)";
-            paletteBar.style.flexDirection = "column";
-        } else {
-            paletteBar.dataset.position = "bottom";
-            paletteBar.style.left = "50%";
-            paletteBar.style.bottom = "-170px";
-            paletteBar.style.transform = "translateX(-50%)";
-            paletteBar.style.flexDirection = "row";
+        if (paletteBar.dataset.position !== palettePosition) {
+            if (palettePosition === "left") {
+                paletteBar.dataset.position = "left";
+                paletteBar.style.left = "-14px";
+                paletteBar.style.bottom = "50%";
+                paletteBar.style.transform = "translate(-100%, 50%)";
+                paletteBar.style.flexDirection = "column";
+            } else {
+                paletteBar.dataset.position = "bottom";
+                paletteBar.style.left = "50%";
+                paletteBar.style.bottom = "-170px";
+                paletteBar.style.transform = "translateX(-50%)";
+                paletteBar.style.flexDirection = "row";
+            }
         }
 
         paletteBar.style.display = "flex";
@@ -2754,7 +4207,11 @@ class StoryboardWorkspace {
     }
 
     renderPaletteColors(bar, colors) {
-        bar.innerHTML = "";
+        const signature = JSON.stringify(colors || []);
+        if (bar.dataset.paletteSignature === signature) return;
+        bar.dataset.paletteSignature = signature;
+        bar.replaceChildren();
+        const fragment = document.createDocumentFragment();
         colors.forEach(c => {
             const dot = document.createElement("div");
             dot.className = "palette-color";
@@ -2790,8 +4247,75 @@ class StoryboardWorkspace {
                     console.warn(`Copy failed for ${text}`);
                 }
             };
-            bar.appendChild(dot);
+            fragment.appendChild(dot);
         });
+        bar.appendChild(fragment);
+    }
+
+    renderNoteMeta(el, item) {
+        let meta = el.querySelector(".note-meta");
+        if (!meta) {
+            meta = document.createElement("div");
+            meta.className = "note-meta";
+            el.appendChild(meta);
+        }
+
+        const label = item.label || "";
+        const tags = Array.isArray(item.tags) ? item.tags.filter(Boolean) : [];
+        const signature = JSON.stringify({ label, tags });
+        if (meta.dataset.renderSignature === signature) {
+            meta.style.display = (label || tags.length) ? "flex" : "none";
+            return meta;
+        }
+
+        meta.dataset.renderSignature = signature;
+        meta.replaceChildren();
+        const fragment = document.createDocumentFragment();
+
+        if (label) {
+            const labelChip = document.createElement("div");
+            labelChip.className = "note-chip note-chip-label";
+            labelChip.innerText = label;
+            fragment.appendChild(labelChip);
+        }
+
+        tags.forEach(tag => {
+            const tagChip = document.createElement("div");
+            tagChip.className = "note-chip note-chip-tag";
+            tagChip.innerText = `#${tag}`;
+            fragment.appendChild(tagChip);
+        });
+
+        meta.appendChild(fragment);
+        meta.style.display = meta.children.length > 0 ? "flex" : "none";
+        return meta;
+    }
+
+    renderPaletteWidgetColors(container, colors) {
+        const signature = JSON.stringify(colors || []);
+        if (container.dataset.paletteSignature === signature) return;
+        container.dataset.paletteSignature = signature;
+        container.replaceChildren();
+        const fragment = document.createDocumentFragment();
+
+        colors.forEach(hex => {
+            const pill = document.createElement("div");
+            pill.className = "palette-color";
+            pill.style.backgroundColor = hex;
+            pill.style.color = this.getContrastColor(hex);
+            pill.innerText = hex.toUpperCase();
+            pill.title = `Click to copy: ${hex}`;
+            pill.onmousedown = (e) => e.stopPropagation();
+            pill.onclick = async (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const success = await this.copyToClipboard(hex.toUpperCase());
+                if (success) this.showCopyFeedback(pill);
+            };
+            fragment.appendChild(pill);
+        });
+
+        container.appendChild(fragment);
     }
 
     showCopyFeedback(el) {
@@ -2890,7 +4414,7 @@ class StoryboardWorkspace {
 
     getItemsInFrame(frame) {
         if (!frame || frame.type !== "frame") return [];
-        return this.boardData.items.filter(item => {
+        return this.getVisibleBoardItems().filter(item => {
             if (!this.isMoodboardContentItem(item)) return false;
             const centerX = item.x + (item.w / 2);
             const centerY = item.y + (item.h / 2);
@@ -2962,19 +4486,32 @@ class StoryboardWorkspace {
             el.appendChild(meta);
         }
 
-        meta.dataset.presentation = presentation;
-        meta.innerHTML = "";
-
         const label = (item.label || "").trim();
         const tags = (item.tags || []).filter(Boolean);
         const showTags = presentation !== "polaroid";
         const captionText = getMediaCaptionText(item, presentation);
+        const signature = JSON.stringify({
+            presentation,
+            label,
+            tags,
+            showTags,
+            captionText,
+        });
+
+        if (meta.dataset.renderSignature === signature) {
+            return meta;
+        }
+
+        meta.dataset.presentation = presentation;
+        meta.dataset.renderSignature = signature;
+        meta.replaceChildren();
+        const fragment = document.createDocumentFragment();
 
         if (captionText) {
             const labelChip = document.createElement("div");
             labelChip.className = "image-chip image-chip-label";
             labelChip.innerText = captionText;
-            meta.appendChild(labelChip);
+            fragment.appendChild(labelChip);
         }
 
         if (showTags) {
@@ -2982,35 +4519,29 @@ class StoryboardWorkspace {
                 const tagChip = document.createElement("div");
                 tagChip.className = "image-chip image-chip-tag";
                 tagChip.innerText = `#${tag}`;
-                meta.appendChild(tagChip);
+                fragment.appendChild(tagChip);
             });
         } else if (!label && tags.length > 1) {
             const extraTagText = document.createElement("div");
             extraTagText.className = "image-chip image-chip-tag";
             extraTagText.innerText = `+${tags.length - 1} tags`;
-            meta.appendChild(extraTagText);
+            fragment.appendChild(extraTagText);
         }
 
+        meta.appendChild(fragment);
         meta.style.display = meta.children.length > 0 ? "flex" : "none";
         return meta;
     }
 
     autoArrangeFrame(frame) {
         if (!frame || frame.type !== "frame") return;
+        if (this.isItemLocked(frame)) return;
 
         const margin = 24;
         const gap = 20;
-        const itemsInFrame = this.boardData.items.filter(it => {
-            if (it.id === frame.id || it.type === "frame") return false;
-            const cx = it.x + it.w / 2;
-            const cy = it.y + it.h / 2;
-            return (
-                cx >= frame.x &&
-                cy >= frame.y &&
-                cx <= (frame.x + frame.w) &&
-                cy <= (frame.y + frame.h)
-            );
-        }).sort((a, b) => {
+        const visibleFrameItems = this.getItemsInFrame(frame);
+        if (visibleFrameItems.some((item) => this.isItemLocked(item))) return;
+        const itemsInFrame = visibleFrameItems.slice().sort((a, b) => {
             if (Math.abs(a.y - b.y) > 10) return a.y - b.y;
             return a.x - b.x;
         });
@@ -3056,10 +4587,69 @@ class StoryboardWorkspace {
         frame.h = (margin * 2) + contentH;
     }
 
+    buildInspectorRenderSignature() {
+        const selectionIds = this.boardData?.selection || [];
+        if (!selectionIds.length) {
+            return JSON.stringify({
+                mode: "empty",
+                hidden: this.getHiddenBoardItems().length,
+                locked: this.getLockedBoardItems().length,
+                groups: this.boardData?.groups?.length || 0,
+            });
+        }
+
+        const selectedItems = selectionIds
+            .map((itemId) => this.getItemById(itemId))
+            .filter(Boolean)
+            .map((item) => ({
+                id: item.id,
+                type: item.type,
+                hidden: Boolean(item.hidden),
+                locked: Boolean(item.locked),
+                label: item.label || "",
+                ref_id: item.ref_id || 0,
+                color: item.color || "",
+                presentation: item.media_presentation || item.frame_presentation || "",
+                tags: Array.isArray(item.tags) ? item.tags.join("|") : "",
+                scene_code: item.scene_code || "",
+                scene_subtitle: item.scene_subtitle || "",
+            }));
+
+        return JSON.stringify({
+            mode: selectionIds.length === 1 ? "single" : "multi",
+            selection: selectedItems,
+            groups: this.boardData?.groups?.length || 0,
+            hidden: this.getHiddenBoardItems().length,
+            locked: this.getLockedBoardItems().length,
+        });
+    }
+
     renderInspector() {
         const content = document.getElementById("inspector-content");
+        const signature = this.buildInspectorRenderSignature();
+        if (signature === this.inspectorRenderSignature) return;
+        this.inspectorRenderSignature = signature;
         if (this.boardData.selection.length === 0) {
-            content.innerHTML = "Select an item to see details";
+            const hiddenCount = this.getHiddenBoardItems().length;
+            const lockedCount = this.getLockedBoardItems().length;
+            content.innerHTML = `
+                <div class="inspector-summary">No active selection</div>
+                <div class="storyboard-collection-empty">
+                    ${hiddenCount} hidden · ${lockedCount} locked
+                    ${hiddenCount > 0 ? `<br><button id="action-reveal-hidden-inline" type="button">Reveal Hidden Items</button>` : ""}
+                </div>
+                ${this.renderCollectionsSection({
+                    title: "Board Collections",
+                    emptyMessage: "Select items, then save them as a collection so you can reselect and focus that cluster later.",
+                })}
+            `;
+            const revealInlineButton = document.getElementById("action-reveal-hidden-inline");
+            if (revealInlineButton) {
+                revealInlineButton.onclick = () => {
+                    void this.revealAllHiddenItems();
+                };
+            }
+            this.bindCollectionInspectorActions();
             return;
         }
 
@@ -3073,27 +4663,39 @@ class StoryboardWorkspace {
                     <button id="action-renumber-frames">Renumber Frames</button>
                     <button id="action-straighten-selection">Straighten Selection</button>
                     <button id="action-frame-selection">Frame Selection</button>
+                    <button id="action-focus-selection">Focus Selection</button>
                     <button id="action-align-left">Align Left</button>
                     <button id="action-align-right">Align Right</button>
                     <button id="action-align-top">Align Top</button>
                     <button id="action-align-bottom">Align Bottom</button>
                     <button id="action-distribute-h">Distribute H</button>
                     <button id="action-distribute-v">Distribute V</button>
+                    <button id="action-hide-selected">Hide Selection</button>
+                    <button id="action-lock-selected">Lock Selected</button>
+                    <button id="action-unlock-selected">Unlock Selected</button>
+                    <button id="action-duplicate-selected">Duplicate Selected</button>
                     <button id="action-delete-selected" class="danger">Delete Selected</button>
                 </div>
+                ${this.renderCollectionsSection({
+                    allowCreateFromSelection: true,
+                    title: "Saved Collections",
+                    emptyMessage: "Save this selection as a collection to reuse it later.",
+                })}
             `;
 
-            const selectedItems = this.boardData.selection
-                .map(id => this.boardData.items.find(i => i.id === id))
-                .filter(Boolean);
-            const moodboardItems = selectedItems.filter(item => this.isMoodboardContentItem(item));
-            const selectedFrames = selectedItems.filter(item => item.type === "frame");
+            const selectedItems = this.getSelectedItems();
+            const editableSelectedItems = selectedItems.filter((item) => this.isItemEditable(item));
+            const hasLockedSelection = selectedItems.some((item) => this.isItemLocked(item));
+            const moodboardItems = editableSelectedItems.filter((item) => this.isMoodboardContentItem(item));
+            const selectedFrames = editableSelectedItems.filter((item) => item.type === "frame");
 
             const scatterButton = document.getElementById("action-scatter-moodboard");
             if (scatterButton) {
                 const canScatter = moodboardItems.length > 1;
                 scatterButton.disabled = !canScatter;
-                scatterButton.title = canScatter ? "Create a looser moodboard composition from the selected items" : "Select at least two non-frame items";
+                scatterButton.title = canScatter
+                    ? "Create a looser moodboard composition from the unlocked items in this selection"
+                    : "Need at least two unlocked non-frame items";
                 scatterButton.onclick = () => {
                     if (!canScatter) return;
                     this.arrangeItemsAsMoodboard(moodboardItems);
@@ -3106,7 +4708,9 @@ class StoryboardWorkspace {
             if (storyStripButton) {
                 const canStoryStrip = moodboardItems.length > 1;
                 storyStripButton.disabled = !canStoryStrip;
-                storyStripButton.title = canStoryStrip ? "Arrange the selected items into a clean storyboard strip" : "Select at least two non-frame items";
+                storyStripButton.title = canStoryStrip
+                    ? "Arrange the unlocked items in this selection into a clean storyboard strip"
+                    : "Need at least two unlocked non-frame items";
                 storyStripButton.onclick = () => {
                     if (!canStoryStrip) return;
                     this.arrangeItemsAsStoryStrip(moodboardItems);
@@ -3119,7 +4723,9 @@ class StoryboardWorkspace {
             if (stackSelectionButton) {
                 const canStackSelection = moodboardItems.length > 1;
                 stackSelectionButton.disabled = !canStackSelection;
-                stackSelectionButton.title = canStackSelection ? "Build an overlapping moodboard pile from the selected items" : "Select at least two non-frame items";
+                stackSelectionButton.title = canStackSelection
+                    ? "Build an overlapping moodboard pile from the unlocked items in this selection"
+                    : "Need at least two unlocked non-frame items";
                 stackSelectionButton.onclick = () => {
                     if (!canStackSelection) return;
                     this.arrangeItemsAsStack(moodboardItems);
@@ -3134,7 +4740,9 @@ class StoryboardWorkspace {
                 const tiltableItems = moodboardItems.filter(item => this.isTiltableItem(item));
                 const canStraighten = tiltableItems.some(item => this.getItemRotation(item) !== 0);
                 straightenSelectionButton.disabled = !canStraighten;
-                straightenSelectionButton.title = canStraighten ? "Reset tilt on the selected items" : "No selected items are tilted";
+                straightenSelectionButton.title = canStraighten
+                    ? "Reset tilt on the unlocked items in this selection"
+                    : "No unlocked selected items are tilted";
                 straightenSelectionButton.onclick = () => {
                     if (!canStraighten) return;
                     this.straightenItems(tiltableItems);
@@ -3147,7 +4755,9 @@ class StoryboardWorkspace {
             if (renumberFramesButton) {
                 const canRenumberFrames = selectedFrames.length > 0;
                 renumberFramesButton.disabled = !canRenumberFrames;
-                renumberFramesButton.title = canRenumberFrames ? "Assign scene numbers to selected frames in reading order" : "Select at least one frame";
+                renumberFramesButton.title = canRenumberFrames
+                    ? "Assign scene numbers to the unlocked selected frames in reading order"
+                    : "Select at least one unlocked frame";
                 renumberFramesButton.onclick = () => {
                     if (!canRenumberFrames) return;
                     this.renumberFrames(selectedFrames);
@@ -3158,12 +4768,14 @@ class StoryboardWorkspace {
 
             const frameSelectionButton = document.getElementById("action-frame-selection");
             if (frameSelectionButton) {
-                const canFrameSelection = moodboardItems.length > 0;
+                const canFrameSelection = selectedItems.filter(item => this.isMoodboardContentItem(item)).length > 0;
                 frameSelectionButton.disabled = !canFrameSelection;
-                frameSelectionButton.title = canFrameSelection ? "Create a frame around the selected moodboard items" : "Select at least one non-frame item";
+                frameSelectionButton.title = canFrameSelection
+                    ? "Create a frame around the visible moodboard items in this selection"
+                    : "Select at least one non-frame item";
                 frameSelectionButton.onclick = () => {
                     if (!canFrameSelection) return;
-                    const frame = this.createFrameFromItems(moodboardItems);
+                    const frame = this.createFrameFromItems(selectedItems);
                     this.renderBoard();
                     this.saveBoard();
                     const frameEl = frame ? this.itemElements.get(frame.id) : null;
@@ -3171,79 +4783,152 @@ class StoryboardWorkspace {
                 };
             }
 
+            const focusSelectionButton = document.getElementById("action-focus-selection");
+            if (focusSelectionButton) {
+                focusSelectionButton.disabled = selectedItems.length === 0;
+                focusSelectionButton.title = selectedItems.length ? "Center and zoom the view to the current selection" : "Select at least one item";
+                focusSelectionButton.onclick = () => {
+                    if (!selectedItems.length) return;
+                    this.focusViewOnItems(selectedItems);
+                };
+            }
+
             document.getElementById("action-align-left").onclick = () => {
-                const minX = Math.min(...this.boardData.selection.map(id => this.boardData.items.find(i => i.id === id).x));
-                this.boardData.selection.forEach(id => {
-                    this.boardData.items.find(i => i.id === id).x = minX;
+                if (!editableSelectedItems.length) return;
+                const minX = Math.min(...editableSelectedItems.map((item) => item.x));
+                editableSelectedItems.forEach((item) => {
+                    item.x = minX;
                 });
                 this.renderBoard();
                 this.saveBoard();
             };
 
             document.getElementById("action-align-right").onclick = () => {
-                const maxX = Math.max(...this.boardData.selection.map(id => {
-                    const i = this.boardData.items.find(it => it.id === id);
-                    return i.x + i.w;
-                }));
-                this.boardData.selection.forEach(id => {
-                    const it = this.boardData.items.find(i => i.id === id);
-                    it.x = maxX - it.w;
+                if (!editableSelectedItems.length) return;
+                const maxX = Math.max(...editableSelectedItems.map((item) => item.x + item.w));
+                editableSelectedItems.forEach((item) => {
+                    item.x = maxX - item.w;
                 });
                 this.renderBoard();
                 this.saveBoard();
             };
 
             document.getElementById("action-align-top").onclick = () => {
-                const minY = Math.min(...this.boardData.selection.map(id => this.boardData.items.find(i => i.id === id).y));
-                this.boardData.selection.forEach(id => {
-                    this.boardData.items.find(i => i.id === id).y = minY;
+                if (!editableSelectedItems.length) return;
+                const minY = Math.min(...editableSelectedItems.map((item) => item.y));
+                editableSelectedItems.forEach((item) => {
+                    item.y = minY;
                 });
                 this.renderBoard();
                 this.saveBoard();
             };
 
             document.getElementById("action-align-bottom").onclick = () => {
-                const maxY = Math.max(...this.boardData.selection.map(id => {
-                    const i = this.boardData.items.find(it => it.id === id);
-                    return i.y + i.h;
-                }));
-                this.boardData.selection.forEach(id => {
-                    const it = this.boardData.items.find(i => i.id === id);
-                    it.y = maxY - it.h;
+                if (!editableSelectedItems.length) return;
+                const maxY = Math.max(...editableSelectedItems.map((item) => item.y + item.h));
+                editableSelectedItems.forEach((item) => {
+                    item.y = maxY - item.h;
                 });
                 this.renderBoard();
                 this.saveBoard();
             };
+            ["action-align-left", "action-align-right", "action-align-top", "action-align-bottom"].forEach((buttonId) => {
+                const button = document.getElementById(buttonId);
+                if (!button) return;
+                button.disabled = editableSelectedItems.length === 0;
+                button.title = editableSelectedItems.length
+                    ? "Align the unlocked items in this selection"
+                    : "No unlocked items available to align";
+            });
 
             document.getElementById("action-distribute-h").onclick = () => {
-                const selectedItems = this.boardData.selection.map(id => this.boardData.items.find(i => i.id === id)).sort((a, b) => a.x - b.x);
-                if (selectedItems.length < 3) return;
-                const minX = selectedItems[0].x;
-                const maxX = selectedItems[selectedItems.length - 1].x;
-                const gap = (maxX - minX) / (selectedItems.length - 1);
-                selectedItems.forEach((it, i) => {
+                const orderedItems = [...editableSelectedItems].sort((a, b) => a.x - b.x);
+                if (orderedItems.length < 3) return;
+                const minX = orderedItems[0].x;
+                const maxX = orderedItems[orderedItems.length - 1].x;
+                const gap = (maxX - minX) / (orderedItems.length - 1);
+                orderedItems.forEach((it, i) => {
                     it.x = minX + (i * gap);
                 });
                 this.renderBoard();
                 this.saveBoard();
             };
+            ["action-distribute-h", "action-distribute-v"].forEach((buttonId) => {
+                const button = document.getElementById(buttonId);
+                if (!button) return;
+                button.disabled = editableSelectedItems.length < 3;
+                button.title = editableSelectedItems.length >= 3
+                    ? "Distribute the unlocked items in this selection evenly"
+                    : "Need at least three unlocked items to distribute";
+            });
 
             document.getElementById("action-distribute-v").onclick = () => {
-                const selectedItems = this.boardData.selection.map(id => this.boardData.items.find(i => i.id === id)).sort((a, b) => a.y - b.y);
-                if (selectedItems.length < 3) return;
-                const minY = selectedItems[0].y;
-                const maxY = selectedItems[selectedItems.length - 1].y;
-                const gap = (maxY - minY) / (selectedItems.length - 1);
-                selectedItems.forEach((it, i) => {
+                const orderedItems = [...editableSelectedItems].sort((a, b) => a.y - b.y);
+                if (orderedItems.length < 3) return;
+                const minY = orderedItems[0].y;
+                const maxY = orderedItems[orderedItems.length - 1].y;
+                const gap = (maxY - minY) / (orderedItems.length - 1);
+                orderedItems.forEach((it, i) => {
                     it.y = minY + (i * gap);
                 });
                 this.renderBoard();
                 this.saveBoard();
             };
 
+            const hideSelectedButton = document.getElementById("action-hide-selected");
+            if (hideSelectedButton) {
+                const hideableItems = selectedItems.filter((item) => !this.isItemLocked(item));
+                hideSelectedButton.disabled = hideableItems.length === 0;
+                hideSelectedButton.title = hideableItems.length
+                    ? "Hide the unlocked items in the current selection from the canvas and minimap"
+                    : "Unlock an item before hiding it";
+                hideSelectedButton.onclick = () => {
+                    if (!hideableItems.length) return;
+                    void this.setItemsHidden(hideableItems, true);
+                };
+            }
+
+            const lockSelectedButton = document.getElementById("action-lock-selected");
+            if (lockSelectedButton) {
+                const lockableItems = selectedItems.filter((item) => !this.isItemLocked(item));
+                lockSelectedButton.disabled = lockableItems.length === 0;
+                lockSelectedButton.title = lockableItems.length
+                    ? "Lock the current selection so it cannot be moved or edited"
+                    : "All selected items are already locked";
+                lockSelectedButton.onclick = () => {
+                    if (!lockableItems.length) return;
+                    void this.setItemsLocked(lockableItems, true);
+                };
+            }
+
+            const unlockSelectedButton = document.getElementById("action-unlock-selected");
+            if (unlockSelectedButton) {
+                const unlockableItems = selectedItems.filter((item) => this.isItemLocked(item));
+                unlockSelectedButton.disabled = unlockableItems.length === 0;
+                unlockSelectedButton.title = unlockableItems.length
+                    ? "Unlock the selected items so they can be moved and edited again"
+                    : "No selected items are locked";
+                unlockSelectedButton.onclick = () => {
+                    if (!unlockableItems.length) return;
+                    void this.setItemsLocked(unlockableItems, false);
+                };
+            }
+
             document.getElementById("action-delete-selected").onclick = () => {
                 this.removeSelectedItems();
             };
+            document.getElementById("action-duplicate-selected").onclick = () => {
+                this.duplicateSelectedItems();
+            };
+            document.getElementById("action-duplicate-selected").disabled = hasLockedSelection;
+            document.getElementById("action-duplicate-selected").title = hasLockedSelection
+                ? "Unlock the selected items before duplicating them"
+                : "Duplicate the current selection";
+            document.getElementById("action-delete-selected").disabled = hasLockedSelection;
+            document.getElementById("action-delete-selected").title = hasLockedSelection
+                ? "Unlock the selected items before deleting them"
+                : "Delete the current selection";
+            this.bindCollectionInspectorActions();
             return;
         }
 
@@ -3341,6 +5026,10 @@ class StoryboardWorkspace {
         };
 
         const extensionDefinition = this.extensionRegistry.get(item.type);
+        const itemLocked = this.isItemLocked(item);
+        const frameItems = item.type === "frame" ? this.getItemsInFrame(item) : [];
+        const hasLockedFrameItems = frameItems.some((frameItem) => this.isItemLocked(frameItem));
+        const editableFrameItems = frameItems.filter((frameItem) => this.isItemEditable(frameItem));
 
         if (item.type === "image" || item.type === "video" || item.type === "slot" || item.type === "palette") {
             fields += `
@@ -3472,16 +5161,32 @@ class StoryboardWorkspace {
                 <button id="action-copy">Copy to Clipboard</button>
                 <button id="action-front">Bring to Front</button>
                 <button id="action-back">Send to Back</button>
-                <button id="action-pin-toggle">${item.pinned ? "Unpin Item" : "Pin Item"}</button>
+                <button id="action-hide-item">Hide Item</button>
+                <button id="action-lock-toggle">${itemLocked ? "Unlock Item" : "Lock Item"}</button>
                 ${item.type === "frame" ? `<button id="action-toggle-palette">${item.palette_hidden ? "Show Palette" : "Hide Palette"}</button>` : ""}
                 ${item.type === "image" ? `<button id="action-toggle-image-palette">${item.image_palette_visible ? "Hide Palette" : "Show Palette"}</button>` : ""}
                 ${item.type === "frame" ? '<button id="action-auto-layout">Auto Arrange In Frame</button>' : ""}
                 ${item.type === "frame" ? '<button id="action-moodboard-layout">Moodboard Layout In Frame</button>' : ""}
                 ${item.type === "frame" ? '<button id="action-story-strip-layout">Story Strip In Frame</button>' : ""}
                 ${item.type === "frame" ? '<button id="action-stack-layout">Stack Layout In Frame</button>' : ""}
+                <button id="action-duplicate-item">Duplicate Item</button>
                 <button id="action-delete" class="danger">Delete Item</button>
             </div>
+            ${this.renderCollectionsSection({
+                allowCreateFromSelection: true,
+                title: "Saved Collections",
+                emptyMessage: "Save this item as a collection when you want to recall it as part of a larger board structure.",
+            })}
         `;
+
+        if (itemLocked) {
+            content.querySelectorAll(".inspector-field input:not([readonly]), .inspector-field textarea, .inspector-field select").forEach((field) => {
+                field.disabled = true;
+            });
+            content.querySelectorAll(".color-dot").forEach((dot) => {
+                dot.classList.add("is-disabled");
+            });
+        }
 
         document.getElementById("action-copy").onclick = async () => {
             if (item.type === "image") {
@@ -3514,6 +5219,7 @@ class StoryboardWorkspace {
         };
 
         document.getElementById("action-front").onclick = () => {
+            if (itemLocked) return;
             const index = this.boardData.items.indexOf(item);
             this.boardData.items.splice(index, 1);
             this.boardData.items.push(item);
@@ -3522,6 +5228,7 @@ class StoryboardWorkspace {
         };
 
         document.getElementById("action-back").onclick = () => {
+            if (itemLocked) return;
             const index = this.boardData.items.indexOf(item);
             this.boardData.items.splice(index, 1);
             this.boardData.items.unshift(item);
@@ -3530,25 +5237,48 @@ class StoryboardWorkspace {
         };
 
         document.getElementById("action-delete").onclick = () => {
-            if (item.pinned) return;
+            if (itemLocked) return;
             this.boardData.items = this.boardData.items.filter(i => i.id !== item.id);
             this.boardData.selection = [];
             this.renderBoard();
             this.saveBoard();
         };
 
-        const pinToggleButton = document.getElementById("action-pin-toggle");
-        if (pinToggleButton) {
-            pinToggleButton.onclick = () => {
-                item.pinned = !item.pinned;
-                this.renderBoard();
-                this.saveBoard();
+        document.getElementById("action-duplicate-item").onclick = () => {
+            this.boardData.selection = [item.id];
+            this.duplicateSelectedItems();
+        };
+        document.getElementById("action-front").disabled = itemLocked;
+        document.getElementById("action-front").title = itemLocked ? "Unlock this item before reordering it" : "Bring this item to the front";
+        document.getElementById("action-back").disabled = itemLocked;
+        document.getElementById("action-back").title = itemLocked ? "Unlock this item before reordering it" : "Send this item behind the others";
+        document.getElementById("action-duplicate-item").disabled = itemLocked;
+        document.getElementById("action-duplicate-item").title = itemLocked ? "Unlock this item before duplicating it" : "Duplicate this item";
+        document.getElementById("action-delete").disabled = itemLocked;
+        document.getElementById("action-delete").title = itemLocked ? "Unlock this item before deleting it" : "Delete this item";
+
+        const hideItemButton = document.getElementById("action-hide-item");
+        if (hideItemButton) {
+            hideItemButton.disabled = itemLocked;
+            hideItemButton.title = itemLocked ? "Unlock this item before hiding it" : "Hide this item from the canvas and minimap";
+            hideItemButton.onclick = () => {
+                if (itemLocked) return;
+                void this.setItemsHidden([item], true);
+            };
+        }
+
+        const lockToggleButton = document.getElementById("action-lock-toggle");
+        if (lockToggleButton) {
+            lockToggleButton.onclick = () => {
+                void this.setItemsLocked([item], !itemLocked);
             };
         }
 
         const togglePaletteButton = document.getElementById("action-toggle-palette");
         if (togglePaletteButton) {
+            togglePaletteButton.disabled = itemLocked;
             togglePaletteButton.onclick = () => {
+                if (itemLocked) return;
                 item.palette_hidden = !item.palette_hidden;
                 this.renderBoard();
                 this.saveBoard();
@@ -3557,7 +5287,9 @@ class StoryboardWorkspace {
 
         const toggleImagePaletteButton = document.getElementById("action-toggle-image-palette");
         if (toggleImagePaletteButton) {
+            toggleImagePaletteButton.disabled = itemLocked;
             toggleImagePaletteButton.onclick = async () => {
+                if (itemLocked) return;
                 if (item.image_palette_visible) {
                     item.image_palette_visible = false;
                     this.renderBoard();
@@ -3591,7 +5323,16 @@ class StoryboardWorkspace {
 
         const autoLayoutButton = document.getElementById("action-auto-layout");
         if (autoLayoutButton) {
+            autoLayoutButton.disabled = itemLocked || hasLockedFrameItems || editableFrameItems.length === 0;
+            autoLayoutButton.title = itemLocked
+                ? "Unlock this frame before auto-arranging it"
+                : hasLockedFrameItems
+                    ? "Unlock the visible locked items in this frame before auto-arranging"
+                    : editableFrameItems.length
+                        ? "Automatically arrange the visible unlocked items inside this frame"
+                        : "No editable items inside this frame";
             autoLayoutButton.onclick = () => {
+                if (autoLayoutButton.disabled) return;
                 this.autoArrangeFrame(item);
                 this.straightenItems(this.getItemsInFrame(item));
                 this.renderBoard();
@@ -3603,13 +5344,18 @@ class StoryboardWorkspace {
 
         const moodboardLayoutButton = document.getElementById("action-moodboard-layout");
         if (moodboardLayoutButton) {
-            const frameItems = this.getItemsInFrame(item);
-            const canScatterInFrame = frameItems.length > 1;
+            const canScatterInFrame = !itemLocked && !hasLockedFrameItems && editableFrameItems.length > 1;
             moodboardLayoutButton.disabled = !canScatterInFrame;
-            moodboardLayoutButton.title = canScatterInFrame ? "Arrange the items in this frame into a looser moodboard composition" : "Need at least two items inside the frame";
+            moodboardLayoutButton.title = canScatterInFrame
+                ? "Arrange the unlocked items in this frame into a looser moodboard composition"
+                : itemLocked
+                    ? "Unlock this frame before rearranging it"
+                    : hasLockedFrameItems
+                        ? "Unlock the visible locked items in this frame before rearranging"
+                        : "Need at least two unlocked items inside the frame";
             moodboardLayoutButton.onclick = () => {
                 if (!canScatterInFrame) return;
-                this.arrangeItemsAsMoodboard(frameItems, {
+                this.arrangeItemsAsMoodboard(editableFrameItems, {
                     bounds: { x: item.x, y: item.y, w: item.w, h: item.h },
                     padding: 28,
                     allowResize: true,
@@ -3623,13 +5369,18 @@ class StoryboardWorkspace {
 
         const storyStripLayoutButton = document.getElementById("action-story-strip-layout");
         if (storyStripLayoutButton) {
-            const frameItems = this.getItemsInFrame(item);
-            const canStripInFrame = frameItems.length > 1;
+            const canStripInFrame = !itemLocked && !hasLockedFrameItems && editableFrameItems.length > 1;
             storyStripLayoutButton.disabled = !canStripInFrame;
-            storyStripLayoutButton.title = canStripInFrame ? "Arrange the items in this frame into a storyboard strip" : "Need at least two items inside the frame";
+            storyStripLayoutButton.title = canStripInFrame
+                ? "Arrange the unlocked items in this frame into a storyboard strip"
+                : itemLocked
+                    ? "Unlock this frame before rearranging it"
+                    : hasLockedFrameItems
+                        ? "Unlock the visible locked items in this frame before rearranging"
+                        : "Need at least two unlocked items inside the frame";
             storyStripLayoutButton.onclick = () => {
                 if (!canStripInFrame) return;
-                this.arrangeItemsAsStoryStrip(frameItems, {
+                this.arrangeItemsAsStoryStrip(editableFrameItems, {
                     bounds: { x: item.x, y: item.y, w: item.w, h: item.h },
                     padding: 28,
                     allowResize: true,
@@ -3643,18 +5394,23 @@ class StoryboardWorkspace {
 
         const stackLayoutButton = document.getElementById("action-stack-layout");
         if (stackLayoutButton) {
-            const frameItems = this.getItemsInFrame(item);
-            const canStackInFrame = frameItems.length > 1;
+            const canStackInFrame = !itemLocked && !hasLockedFrameItems && editableFrameItems.length > 1;
             stackLayoutButton.disabled = !canStackInFrame;
-            stackLayoutButton.title = canStackInFrame ? "Build an overlapping moodboard pile inside this frame" : "Need at least two items inside the frame";
+            stackLayoutButton.title = canStackInFrame
+                ? "Build an overlapping moodboard pile from the unlocked items inside this frame"
+                : itemLocked
+                    ? "Unlock this frame before rearranging it"
+                    : hasLockedFrameItems
+                        ? "Unlock the visible locked items in this frame before rearranging"
+                        : "Need at least two unlocked items inside the frame";
             stackLayoutButton.onclick = () => {
                 if (!canStackInFrame) return;
-                this.arrangeItemsAsStack(frameItems, {
+                this.arrangeItemsAsStack(editableFrameItems, {
                     bounds: { x: item.x, y: item.y, w: item.w, h: item.h },
                     padding: 30,
                     allowResize: true,
                 });
-                this.restackItems(frameItems, (a, b) => (b.w * b.h) - (a.w * a.h));
+                this.restackItems(editableFrameItems, (a, b) => (b.w * b.h) - (a.w * a.h));
                 this.renderBoard();
                 this.saveBoard();
                 const frameEl = this.itemElements.get(item.id);
@@ -3828,12 +5584,12 @@ class StoryboardWorkspace {
             bindTypography("inspector-note-font-size", "font_size", (v) => v ? parseInt(v, 10) : "");
             bindTypography("inspector-note-font-weight", "font_weight");
             bindTypography("inspector-note-text-align", "text_align");
-        } else if (typeof extensionDefinition?.bindInspector === "function") {
+        } else if (typeof extensionDefinition?.bindInspector === "function" && !itemLocked) {
             extensionDefinition.bindInspector({ workspace: this, item });
         }
 
         // Color handling for both frame and note
-        if (item.type === "frame" || item.type === "note") {
+        if ((item.type === "frame" || item.type === "note") && !itemLocked) {
             const colorInput = document.getElementById("inspector-color");
             const updateColor = (newColor) => {
                 item.color = newColor;
@@ -3857,13 +5613,20 @@ class StoryboardWorkspace {
                 };
             });
         }
+
+        this.bindCollectionInspectorActions();
     }
 
     setupInteractions() {
         // Simple pan and zoom logic
         let isPanning = false;
         let isMinimapDragging = false;
+        let selectionDragState = null;
         let startPos = { x: 0, y: 0 };
+        const selectionListsEqual = (left, right) => (
+            left.length === right.length &&
+            left.every((itemId, index) => itemId === right[index])
+        );
 
         // Global click listener to close context menu
         window.addEventListener("click", (e) => {
@@ -3881,18 +5644,27 @@ class StoryboardWorkspace {
         });
 
         this.canvasContainer.onmousedown = (e) => {
-            // Deselect if clicking the canvas directly
-            if (this.isCanvasBackgroundTarget(e.target)) {
-                this.boardData.selection = [];
-                this.renderBoard();
-                this.saveBoard();
-            }
+            const isBackground = this.isCanvasBackgroundTarget(e.target);
 
-            if (e.button === 1 || (e.button === 0 && e.altKey)) {
+            if (isBackground && (e.button === 1 || (e.button === 0 && e.altKey))) {
                 isPanning = true;
                 this.isInteracting = true;
                 startPos = { x: e.clientX - this.offset.x, y: e.clientY - this.offset.y };
+                return;
             }
+
+            if (!isBackground || e.button !== 0) {
+                return;
+            }
+
+            selectionDragState = {
+                startClientX: e.clientX,
+                startClientY: e.clientY,
+                startSelection: [...this.boardData.selection],
+                lastSelection: [...this.boardData.selection],
+                additive: Boolean(e.shiftKey || e.ctrlKey || e.metaKey),
+                marqueeActive: false,
+            };
         };
 
         this.canvasContainer.ondblclick = (e) => {
@@ -3917,10 +5689,58 @@ class StoryboardWorkspace {
                 this.updateTransform();
             } else if (isMinimapDragging) {
                 this.jumpToMinimap(e.clientX, e.clientY);
+            } else if (selectionDragState) {
+                const pixelRect = normalizePixelRect(
+                    selectionDragState.startClientX,
+                    selectionDragState.startClientY,
+                    e.clientX,
+                    e.clientY,
+                );
+                if (!selectionDragState.marqueeActive && !pixelRectExceedsThreshold(pixelRect, 6)) {
+                    return;
+                }
+
+                selectionDragState.marqueeActive = true;
+                this.isInteracting = true;
+
+                const startPoint = this.getCanvasContainerPoint(pixelRect.x, pixelRect.y);
+                const endPoint = this.getCanvasContainerPoint(pixelRect.x + pixelRect.w, pixelRect.y + pixelRect.h);
+                const localRect = normalizePixelRect(startPoint.x, startPoint.y, endPoint.x, endPoint.y);
+                this.showSelectionMarquee(localRect);
+
+                const worldRect = pixelRectToWorldRect(localRect, this.offset, this.scale);
+                const intersectingIds = getItemIdsIntersectingWorldRect(this.boardData.items, worldRect);
+                const nextSelection = selectionDragState.additive
+                    ? Array.from(new Set([...selectionDragState.startSelection, ...intersectingIds]))
+                    : intersectingIds;
+                selectionDragState.lastSelection = nextSelection;
+                this.previewSelection(nextSelection);
             }
         };
 
         window.onmouseup = () => {
+            if (selectionDragState) {
+                const { additive, marqueeActive, startSelection, lastSelection } = selectionDragState;
+                const nextSelection = marqueeActive ? lastSelection : (additive ? startSelection : []);
+                const changed = !selectionListsEqual(this.boardData.selection, nextSelection);
+
+                selectionDragState = null;
+                this.isInteracting = false;
+                this.hideSelectionMarquee();
+                this.clearSelectionPreview();
+
+                if (marqueeActive || changed) {
+                    this.boardData.selection = nextSelection;
+                    this.renderBoard();
+                    if (changed) this.saveBoard();
+                }
+                return;
+            }
+
+            if (isPanning || isMinimapDragging) {
+                this.scheduleViewportSave();
+                this.deferMediaDeactivation();
+            }
             isPanning = false;
             isMinimapDragging = false;
             this.isInteracting = false;
@@ -3938,45 +5758,44 @@ class StoryboardWorkspace {
             const mouseY = e.clientY - rect.top;
             
             this.zoomAtPoint(zoom, mouseX, mouseY);
+            this.scheduleViewportSave();
+            this.deferMediaDeactivation();
         };
 
         // Drag and drop support
-        this.canvasContainer.ondragover = (e) => e.preventDefault();
+        this.canvasContainer.ondragover = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+        };
         
         window.onpaste = async (e) => {
             const items = e.clipboardData.items;
+            const createdItems = [];
             for (const item of items) {
                 if (item.type.startsWith("image/")) {
                     const file = item.getAsFile();
-                    const formData = new FormData();
-                    formData.append("image", file);
-                    
-                    const response = await fetch(`/mkr/storyboard/${this.boardId}/upload`, {
-                        method: "POST",
-                        body: formData
-                    });
-                    
-                    const result = await response.json();
-                    if (result.filename) {
-                        this.boardData.items.push(createImageItem({
-                            x: -this.offset.x / this.scale + 100,
-                            y: -this.offset.y / this.scale + 100,
-                            imageRef: result.filename,
-                            label: "Pasted Image",
-                            imageWidth: result.width,
-                            imageHeight: result.height,
-                            generateId: () => this.generateUUID()
-                        }));
-                        this.renderBoard();
-                        await this.saveBoard();
-                    }
+                    const nextItem = await this.createStoryboardItemFromDroppedFile(
+                        file,
+                        (-this.offset.x / this.scale) + 100 + (createdItems.length * 18),
+                        (-this.offset.y / this.scale) + 100 + (createdItems.length * 18),
+                        { label: "Pasted Image" },
+                    );
+                    if (nextItem) createdItems.push(nextItem);
                 }
+            }
+            if (createdItems.length > 0) {
+                this.boardData.items.push(...createdItems);
+                this.renderBoard();
+                await this.saveBoard();
             }
         };
 
         this.canvasContainer.ondrop = async (e) => {
             e.preventDefault();
+            e.stopPropagation();
             const files = e.dataTransfer.files;
+            const createdItems = [];
             
             // Calculate position in canvas space
             const rect = this.canvasContainer.getBoundingClientRect();
@@ -3984,67 +5803,18 @@ class StoryboardWorkspace {
             const mouseY = (e.clientY - rect.top - this.offset.y) / this.scale;
 
             for (const file of files) {
-                if (file.type.startsWith("image/")) {
-                    const formData = new FormData();
-                    formData.append("image", file);
-                    
-                    const response = await fetch(`/mkr/storyboard/${this.boardId}/upload`, {
-                        method: "POST",
-                        body: formData
-                    });
-                    
-                    const result = await response.json();
-                    if (result.filename) {
-                        this.boardData.items.push(createImageItem({
-                            x: mouseX,
-                            y: mouseY,
-                            imageRef: result.filename,
-                            label: file.name || "Dropped Image",
-                            imageWidth: result.width,
-                            imageHeight: result.height,
-                            generateId: () => this.generateUUID()
-                        }));
-                        this.renderBoard();
-                        await this.saveBoard();
-                    }
-                } else if (file.type.startsWith("video/")) {
-                    const formData = new FormData();
-                    formData.append("asset", file);
+                const nextItem = await this.createStoryboardItemFromDroppedFile(
+                    file,
+                    mouseX + (createdItems.length * 24),
+                    mouseY + (createdItems.length * 24),
+                );
+                if (nextItem) createdItems.push(nextItem);
+            }
 
-                    const response = await fetch(`/mkr/storyboard/${this.boardId}/upload`, {
-                        method: "POST",
-                        body: formData
-                    });
-                    const result = await response.json();
-                    if (result.filename) {
-                        const videoSize = await new Promise((resolve) => {
-                            const probe = document.createElement("video");
-                            const objectUrl = URL.createObjectURL(file);
-                            probe.preload = "metadata";
-                            probe.onloadedmetadata = () => {
-                                URL.revokeObjectURL(objectUrl);
-                                resolve({ w: probe.videoWidth || 640, h: probe.videoHeight || 360 });
-                            };
-                            probe.onerror = () => {
-                                URL.revokeObjectURL(objectUrl);
-                                resolve({ w: 640, h: 360 });
-                            };
-                            probe.src = objectUrl;
-                        });
-
-                        this.boardData.items.push(createVideoItem({
-                            x: mouseX,
-                            y: mouseY,
-                            videoRef: result.filename,
-                            label: file.name || "Dropped Video",
-                            videoWidth: videoSize.w,
-                            videoHeight: videoSize.h,
-                            generateId: () => this.generateUUID()
-                        }));
-                        this.renderBoard();
-                        await this.saveBoard();
-                    }
-                }
+            if (createdItems.length > 0) {
+                this.boardData.items.push(...createdItems);
+                this.renderBoard();
+                await this.saveBoard();
             }
         };
 
@@ -4094,19 +5864,34 @@ class StoryboardWorkspace {
             return head;
         };
 
+        const appendBoardActions = () => {
+            this.contextMenu.appendChild(createSeparator());
+            this.contextMenu.appendChild(createHeader("Actions"));
+            this.contextMenu.appendChild(createButton("Import Board Package", () => {
+                this.openBoardImportPicker();
+            }));
+            this.contextMenu.appendChild(createButton("Export Board Package", () => {
+                void this.exportCurrentBoardPackage();
+            }));
+            if (this.getHiddenBoardItems().length > 0) {
+                this.contextMenu.appendChild(createButton("Reveal Hidden Items", () => {
+                    void this.revealAllHiddenItems();
+                }));
+            }
+        };
+
         if (this.boardData.selection.length > 0) {
-            const selectedItems = this.boardData.selection
-                .map(id => this.boardData.items.find(i => i.id === id))
-                .filter(Boolean);
-            const moodboardItems = selectedItems.filter(item => this.isMoodboardContentItem(item));
+            const selectedItems = this.getSelectedItems();
+            const editableSelectedItems = selectedItems.filter((item) => this.isItemEditable(item));
+            const moodboardItems = editableSelectedItems.filter(item => this.isMoodboardContentItem(item));
             this.contextMenu.appendChild(createButton("Bring to Front", () => document.getElementById("action-front")?.click()));
             this.contextMenu.appendChild(createButton("Send to Back", () => document.getElementById("action-back")?.click()));
-            const anyPinned = selectedItems.some(i => i.pinned);
-            const pinLabel = anyPinned ? "Unpin Selected" : "Pin Selected";
-            this.contextMenu.appendChild(createButton(pinLabel, () => {
-                selectedItems.forEach(i => i.pinned = !anyPinned);
-                this.renderBoard();
-                this.saveBoard();
+            const anyLocked = selectedItems.some((item) => this.isItemLocked(item));
+            this.contextMenu.appendChild(createButton(anyLocked ? "Unlock Selected" : "Lock Selected", () => {
+                void this.setItemsLocked(selectedItems, !anyLocked);
+            }));
+            this.contextMenu.appendChild(createButton("Hide Selected", () => {
+                void this.setItemsHidden(selectedItems, true);
             }));
 
             if (moodboardItems.length > 1) {
@@ -4149,7 +5934,19 @@ class StoryboardWorkspace {
                 }));
             }
 
-            const presentableItems = selectedItems.filter(item => isMediaPresentationItem(item));
+            this.contextMenu.appendChild(createButton("Save as Collection", () => {
+                this.createCollectionFromSelection();
+            }));
+
+            this.contextMenu.appendChild(createButton("Focus Selection", () => {
+                this.focusViewOnItems(selectedItems);
+            }));
+
+            this.contextMenu.appendChild(createButton("Duplicate Selection", () => {
+                this.duplicateSelectedItems();
+            }));
+
+            const presentableItems = editableSelectedItems.filter(item => isMediaPresentationItem(item));
             if (presentableItems.length > 0) {
                 this.contextMenu.appendChild(createSeparator());
                 this.contextMenu.appendChild(createHeader("Presentation"));
@@ -4170,7 +5967,7 @@ class StoryboardWorkspace {
                 }));
             }
 
-            const presentableFrames = selectedItems.filter(item => isFramePresentationItem(item));
+            const presentableFrames = editableSelectedItems.filter(item => isFramePresentationItem(item));
             if (presentableFrames.length > 0) {
                 this.contextMenu.appendChild(createSeparator());
                 this.contextMenu.appendChild(createHeader("Frame Sequence"));
@@ -4212,7 +6009,7 @@ class StoryboardWorkspace {
                     }
                 }
 
-                if (item.type === "image" || item.type === "video" || item.type === "frame") {
+                if ((item.type === "image" || item.type === "video" || item.type === "frame") && !this.isItemLocked(item)) {
                     this.contextMenu.appendChild(createSeparator());
                     this.contextMenu.appendChild(createHeader("Set as Reference"));
                     
@@ -4252,17 +6049,19 @@ class StoryboardWorkspace {
                 if (this.boardData.selection.length === 1) document.getElementById("action-delete")?.click();
                 else document.getElementById("action-delete-selected")?.click();
             }, "danger"));
+            appendBoardActions();
         } else {
             this.contextMenu.appendChild(createButton("Open Node/Widget Picker", () => {
                 this.openExtensionPicker({ clientX: x, clientY: y });
             }));
+            appendBoardActions();
             const actionExtensions = this.extensionRegistry
                 .listToolbarExtensions()
                 .filter((extension) => typeof extension.onTrigger === "function");
 
             if (actionExtensions.length > 0) {
                 this.contextMenu.appendChild(createSeparator());
-                this.contextMenu.appendChild(createHeader("Actions"));
+                this.contextMenu.appendChild(createHeader("Board Tools"));
                 actionExtensions.forEach((extension) => {
                     this.contextMenu.appendChild(createButton(extension.toolbar.label, () => {
                         void this.runToolbarExtension(extension.type);
@@ -4292,9 +6091,11 @@ class StoryboardWorkspace {
     }
 
     updateTransform() {
+        this.storeViewportState();
         this.canvas.style.transform = `translate(${this.offset.x}px, ${this.offset.y}px) scale(${this.scale})`;
+        this.scheduleVisibleMediaActivation();
         this.updateGridOverlay();
-        this.updateMinimap();
+        this.scheduleMinimapUpdate();
         this.updateMinimapControls();
     }
 }
